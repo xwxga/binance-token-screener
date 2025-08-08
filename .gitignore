@@ -1,0 +1,65 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.env
+
+# OAuth and Credentials (IMPORTANT: Never commit these!)
+oauth_credentials.json
+token.json
+*.key
+*.pem
+
+# Cache files
+coingecko_market_data_cache.json
+daily_gainers_history.json
+*.cache
+
+# Output directories
+report/
+币安代币分析结果_*/
+Excel文件/
+CSV文件/
+分析报告/
+日志文件/
+
+# Logs
+*.log
+logs/
+scheduler_logs/
+
+# Excel and CSV files (analysis results)
+*.xlsx
+*.xls
+*.csv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test files
+test_*.py
+debug_*.py
+analyze_*.py
+verify_*.py
+final_*.py
+quick_*.py
+
+# PID files
+*.pid
+
+# Backup files
+*.bak
+*.backup
+*.old

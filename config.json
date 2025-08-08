@@ -1,0 +1,26 @@
+{
+  "credentials_file": "credentials.json",
+  "spreadsheet_id": "1UoMaLUEqNZcwr3QG-1mJfBr_sfuztEjbGAHo277uN0U",
+  "enable_data_collection": true,
+  "enable_structure_check": true,
+  "enable_analysis": true,
+  "enable_formatting": true,
+  "spot_count": 50,
+  "futures_count": 50,
+  "market_cap_count": 80,
+  "log_level": "INFO",
+  "binance_api": {
+    "api_key": "your_api_key_here",
+    "api_secret": "your_api_secret_here"
+  },
+  "thresholds": {
+    "volume_ratio_high": 3.0,
+    "volume_ratio_low": 0.3,
+    "price_change_high": 15.0,
+    "price_change_low": -15.0,
+    "liquidity_high": 0.1,
+    "liquidity_low": 0.001,
+    "funding_rate_high": 0.001,
+    "funding_rate_low": -0.001
+  }
+}
