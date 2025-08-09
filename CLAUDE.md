@@ -5,58 +5,70 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 
 ## Project Overview / 项目概述
 
-**Binance Token Screener v2.0** - A production-ready cryptocurrency analysis system that fetches real-time data from Binance APIs, performs multi-dimensional analysis, and generates comprehensive reports with Google Sheets integration.
+**Binance Token Screener v3.0** - A production-ready cryptocurrency analysis system that fetches real-time data from Binance APIs, performs multi-dimensional analysis, and generates comprehensive reports with Feishu (Lark) integration.
 
-**币安代币筛选器 v2.0** - 生产就绪的加密货币分析系统，从币安API获取实时数据，执行多维度分析，并生成带有Google Sheets集成的综合报告。
+**币安代币筛选器 v3.0** - 生产就绪的加密货币分析系统，从币安API获取实时数据，执行多维度分析，并生成带有飞书表格集成的综合报告。
 
 ## Core Components / 核心组件
 
 ### Main Modules / 主要模块
 
-1. **binance_token_screener_v2.0.py** - Main production screener / 主生产筛选器
+1. **binance_token_screener_v3.0.py** - Main production screener with Feishu / 带飞书集成的主生产筛选器
    - Orchestrates the entire analysis pipeline / 协调整个分析管道
    - Manages user preferences and configuration / 管理用户偏好和配置
-   - Handles OAuth authentication flow / 处理OAuth认证流程
+   - Handles Feishu authentication flow / 处理飞书认证流程
    - Creates output directories and files / 创建输出目录和文件
    - Integrates all analysis modules / 集成所有分析模块
 
-2. **coingecko_integration.py** - Real market cap data provider / 真实市值数据提供者
+2. **binance_token_screener_v2.0.py** - Legacy Google Sheets version / Google Sheets版本（旧版）
+
+3. **feishu_manager.py** - Feishu API integration / 飞书API集成
+   - Creates and manages Feishu spreadsheets / 创建和管理飞书表格
+   - Handles data type conversion for API compatibility / 处理API兼容性的数据类型转换
+   - Batch uploads data to multiple sheets / 批量上传数据到多个工作表
+   - Manages sheet naming and properties / 管理工作表命名和属性
+
+4. **coingecko_integration.py** - Real market cap data provider / 真实市值数据提供者
    - Fetches top market cap tokens from CoinGecko API / 从CoinGecko API获取市值前列代币
    - Implements caching (1-hour duration) to reduce API calls / 实现缓存(1小时)以减少API调用
    - Maps Binance symbols to CoinGecko IDs / 映射币安符号到CoinGecko ID
    - Provides real market cap, circulating supply, and FDV data / 提供真实市值、流通供应量和FDV数据
 
-3. **data_supplement.py** - Missing token data supplementer / 缺失代币数据补充器
+5. **data_supplement.py** - Missing token data supplementer / 缺失代币数据补充器
    - Fetches data for tokens not in the initial dataset / 获取初始数据集中缺失的代币数据
    - Retrieves spot/futures prices and volumes / 检索现货/期货价格和交易量
    - Calculates 14-day historical averages / 计算14天历史平均值
    - Gets funding rates for futures contracts / 获取期货合约的资金费率
 
-4. **simple_scheduler.py** - Automated scheduling system / 自动调度系统
+6. **simple_scheduler.py** - Automated scheduling system / 自动调度系统
    - Runs daily at 7:45 AM / 每天早上7:45运行
    - Manages process lifecycle with PID tracking / 使用PID跟踪管理进程生命周期
    - Includes network connectivity checks / 包含网络连接检查
    - Comprehensive logging with rotation / 全面的日志记录和轮转
 
-5. **oauth_setup_v1.0.py** - OAuth authentication setup / OAuth认证设置
-   - One-time setup for Google Sheets access / Google Sheets访问的一次性设置
-   - Handles OAuth2 flow with Google / 处理与Google的OAuth2流程
-   - Generates and stores access tokens / 生成并存储访问令牌
-   - Automatic token refresh mechanism / 自动令牌刷新机制
+7. **oauth_setup_v1.0.py** - Legacy OAuth setup for Google Sheets / Google Sheets的OAuth设置（旧版）
 
 ## Quick Start / 快速开始
 
-### 1. Setup OAuth (One-time) / 设置OAuth（一次性）
+### 1. Setup Feishu Config / 设置飞书配置
 ```bash
-/Users/wenxiangxu/opt/anaconda3/envs/crypto_project/bin/python oauth_setup_v1.0.py
+# Create feishu_config.json with your App ID and App Secret
+# 创建 feishu_config.json 并填入您的 App ID 和 App Secret
+echo '{
+  "app_id": "your_app_id",
+  "app_secret": "your_app_secret"
+}' > feishu_config.json
 ```
 
 ### 2. Run the Screener / 运行筛选器
 ```bash
 # Using conda environment (recommended) / 使用conda环境（推荐）
-/Users/wenxiangxu/opt/anaconda3/envs/crypto_project/bin/python binance_token_screener_v2.0.py
+/Users/wenxiangxu/opt/anaconda3/envs/crypto_project/bin/python binance_token_screener_v3.0.py
 
 # Using system Python / 使用系统Python
+python binance_token_screener_v3.0.py
+
+# For Google Sheets version / Google Sheets版本
 python binance_token_screener_v2.0.py
 ```
 
@@ -235,5 +247,5 @@ cd /Users/wenxiangxu/Desktop/alpha_team_code/binance_token_screener
 - Large numbers formatted as M (millions) or B (billions) / 大数字格式化为M（百万）或B（十亿）
 
 ---
-**Version / 版本**: 2.0  
-**Last Updated / 最后更新**: 2025-07-29
+**Version / 版本**: 3.0  
+**Last Updated / 最后更新**: 2025-08-09

@@ -11,6 +11,7 @@ venv/
 # OAuth and Credentials (IMPORTANT: Never commit these!)
 oauth_credentials.json
 token.json
+feishu_config.json
 *.key
 *.pem
 

@@ -19,7 +19,7 @@ class SimpleScheduler:
         # 配置信息
         self.project_path = "/Users/wenxiangxu/Desktop/alpha_team_code/binance_token_screener"
         self.venv_path = "/Users/wenxiangxu/opt/anaconda3/envs/crypto_project"
-        self.main_script = "binance_token_screener_v2.0.py"
+        self.main_script = "binance_token_screener_v3.0.py"
         self.log_file = "simple_scheduler.log"
         
         # 代理配置（如果需要）
