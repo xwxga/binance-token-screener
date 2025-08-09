@@ -12,6 +12,8 @@ venv/
 oauth_credentials.json
 token.json
 feishu_config.json
+telegram_config.json
+notification_config.json
 *.key
 *.pem
 

@@ -11,6 +11,7 @@ A production-ready cryptocurrency analysis system that fetches real-time data fr
 - **Multi-dimensional Analysis / 多维度分析**: 8 different analysis perspectives including volume, market cap, gainers/losers
 - **Automated Scheduling / 自动调度**: Daily runs at 7:45 AM with simple scheduler
 - **Feishu Integration / 飞书表格集成**: Automatic upload of analysis results to Feishu spreadsheets
+- **Telegram Notifications / Telegram通知**: Automatic daily reports and error alerts via Telegram bot
 - **Anomaly Detection / 异常检测**: Identifies unusual volume patterns and price movements
 
 ## Quick Start / 快速开始
@@ -44,6 +45,14 @@ echo '{
   "app_id": "your_app_id",
   "app_secret": "your_app_secret"
 }' > feishu_config.json
+```
+
+4. Setup Telegram Notifications (Optional) / 设置Telegram通知（可选）:
+```bash
+# Run setup script to configure Telegram bot
+python setup_telegram.py
+# Or test with existing configuration
+python telegram_notifier.py --test
 ```
 
 ### Usage / 使用方法

@@ -209,9 +209,13 @@ class SimpleScheduler:
                 self.success_count += 1
                 self.last_run_status = "执行成功"
                 self.logger.info("🎉 定时任务执行完成")
+                # 发送Telegram通知（成功）
+                self.send_telegram_notification(success=True)
             else:
                 self.last_run_status = "脚本执行失败"
                 self.failure_count += 1
+                # 发送Telegram通知（失败）
+                self.send_telegram_notification(success=False)
                         
         except Exception as e:
             self.last_run_status = f"异常: {e}"
@@ -225,6 +229,25 @@ class SimpleScheduler:
                 success_rate = (self.success_count / self.run_count) * 100
                 self.logger.info(f"📈 成功率: {success_rate:.1f}%")
             self.logger.info("=" * 80)
+    
+    def send_telegram_notification(self, success=True):
+        """发送Telegram通知"""
+        try:
+            # 尝试导入Telegram通知器
+            from telegram_notifier import TelegramNotifier
+            
+            notifier = TelegramNotifier()
+            if success:
+                self.logger.info("📱 发送Telegram成功通知...")
+                notifier.send_daily_report(send_files=True)
+            else:
+                self.logger.info("📱 发送Telegram失败通知...")
+                error_msg = f"定时任务执行失败\n状态: {self.last_run_status}\n时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                notifier.send_error_alert(error_msg)
+        except ImportError:
+            self.logger.info("⚠️ Telegram通知模块未安装，跳过通知")
+        except Exception as e:
+            self.logger.error(f"⚠️ Telegram通知发送失败: {e}")
     
     def get_status(self):
         """获取运行状态"""

@@ -43,6 +43,11 @@ import shutil
 # Excel处理将使用pandas内置功能
 from coingecko_integration import CoinGeckoClient
 from data_supplement import DataSupplementer
+# Telegram通知（可选）
+try:
+    from telegram_notifier import TelegramNotifier
+except ImportError:
+    TelegramNotifier = None
 
 class BinanceTokenScreenerV1:
     """
@@ -98,6 +103,14 @@ class BinanceTokenScreenerV1:
         
         # Initialize CoinGecko client for real market cap data
         self.coingecko_client = CoinGeckoClient()
+        
+        # Initialize Telegram notifier (optional)
+        self.telegram_notifier = None
+        if TelegramNotifier:
+            try:
+                self.telegram_notifier = TelegramNotifier()
+            except Exception as e:
+                print(f"⚠️ Telegram通知初始化失败: {e}")
         print("🦎 CoinGecko客户端已初始化")
         
         # Initialize data supplementer for missing tokens
@@ -2730,16 +2743,41 @@ class BinanceTokenScreenerV1:
 
                 if upload_success:
                     self.display_results(datasets, enhanced_df, final_files)
+                    # 发送Telegram通知
+                    self.send_telegram_notification(success=True)
                     return datasets
                 else:
                     print("\n❌ 数据上传失败，但本地文件已生成")
                     self.display_results(datasets, enhanced_df, final_files, offline=True)
+                    # 发送Telegram通知（标记为有警告）
+                    self.send_telegram_notification(success=False, warning="飞书上传失败")
                     return datasets
             else:
                 print("📁 跳过飞书表格上传，仅保留本地文件")
                 self.display_results(datasets, enhanced_df, final_files, offline=True)
+                # 发送Telegram通知
+                self.send_telegram_notification(success=True)
                 return datasets
 
+    def send_telegram_notification(self, success=True, warning=None):
+        """发送Telegram通知"""
+        if not self.telegram_notifier:
+            return
+        
+        try:
+            # 在自动模式下才发送通知
+            if self.auto_mode:
+                print("\n📱 发送Telegram通知...")
+                result = self.telegram_notifier.send_daily_report(send_files=True)
+                if result:
+                    print("✅ Telegram通知发送成功")
+                else:
+                    print("⚠️ Telegram通知发送失败")
+            else:
+                print("📱 手动模式：跳过Telegram通知")
+        except Exception as e:
+            print(f"⚠️ Telegram通知异常: {e}")
+    
     def check_offline_mode(self):
         """检查是否使用离线模式"""
         # 自动模式下默认使用在线模式
@@ -2817,6 +2855,7 @@ class BinanceTokenScreenerV1:
         print(f"  ✅ 14日历史数据分析")
         print(f"  ✅ 实时资金费率和持仓量数据")
         print(f"  ✅ 精细化单元格异常标注")
+        print(f"  ✅ Telegram自动报告通知")
         print(f"  ✅ 排除代币过滤 (ALPACA, BNX等)")
         print(f"  ✅ 每日独立文件 (不覆盖历史)")
         print(f"  ✅ OAuth认证 (解决403存储错误)")
@@ -2824,6 +2863,7 @@ class BinanceTokenScreenerV1:
         print(f"  ✅ 删除空白Sheet1标签页")
         print(f"  ✅ 新增缺失标签页: 每日涨幅榜, 低量高市值, 高市值低期货量")
         print(f"  ✅ Excel本地生成 + 飞书表格上传 (减少API调用)")
+        print(f"  ✅ Telegram每日报告通知")
 
     def debug_futures_focus_completeness(self, df, futures_symbols):
         """
