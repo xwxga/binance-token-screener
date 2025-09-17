@@ -2317,35 +2317,11 @@ class BinanceTokenScreenerV1:
                 if not self.init_feishu_connection():
                     print("❌ 飞书连接失败，跳过上传")
                     return False
-
-            # 检查是否有固定的表格配置
-            update_mode = False
-            config_file = 'feishu_spreadsheet_config.json'
-
-            if os.path.exists(config_file):
-                try:
-                    with open(config_file, 'r', encoding='utf-8') as f:
-                        config = json.load(f)
-
-                    spreadsheet_token = config.get('spreadsheet_token')
-                    if spreadsheet_token:
-                        print(f"📌 使用固定表格: {config.get('spreadsheet_url', '')}")
-                        # 尝试打开现有表格
-                        if self.feishu_manager.open_existing_spreadsheet(spreadsheet_token):
-                            update_mode = True
-                            print("🔄 将更新现有表格数据...")
-                        else:
-                            print("⚠️ 无法打开固定表格，创建新表格")
-                            spreadsheet_token = self.feishu_manager.create_spreadsheet(self.sheet_name)
-                except Exception as e:
-                    print(f"⚠️ 读取配置文件失败: {e}")
-                    spreadsheet_token = self.feishu_manager.create_spreadsheet(self.sheet_name)
-            else:
-                # 没有配置文件，创建新表格
-                spreadsheet_token = self.feishu_manager.create_spreadsheet(self.sheet_name)
-
+            
+            # 创建飞书表格
+            spreadsheet_token = self.feishu_manager.create_spreadsheet(self.sheet_name)
             if not spreadsheet_token:
-                print("❌ 无法获取飞书表格")
+                print("❌ 创建飞书表格失败")
                 return False
 
             # 处理不同类型的文件
@@ -2372,17 +2348,15 @@ class BinanceTokenScreenerV1:
         try:
             # 读取Excel文件
             excel_data = pd.read_excel(excel_filename, sheet_name=None)
-
+            
             # 准备工作表数据
             worksheets_data = {}
             for sheet_name, df in excel_data.items():
                 print(f"  📋 准备工作表: {sheet_name}")
                 worksheets_data[sheet_name] = df
-
-            # 批量上传到飞书（根据是否为更新模式）
-            # 检查是否为更新模式
-            update_mode = hasattr(self.feishu_manager, 'spreadsheet_token') and self.feishu_manager.spreadsheet_token
-            success = self.feishu_manager.upload_all_worksheets(worksheets_data, update_mode=update_mode)
+            
+            # 批量上传到飞书
+            success = self.feishu_manager.upload_all_worksheets(worksheets_data)
             
             if success:
                 print(f"✅ Excel文件已成功上传到飞书表格")
@@ -2410,11 +2384,9 @@ class BinanceTokenScreenerV1:
                     worksheets_data[sheet_name] = df
                     print(f"  📋 准备工作表: {sheet_name}")
             
-            # 批量上传到飞书（根据是否为更新模式）
+            # 批量上传到飞书
             if worksheets_data:
-                # 检查是否为更新模式
-                update_mode = hasattr(self.feishu_manager, 'spreadsheet_token') and self.feishu_manager.spreadsheet_token
-                success = self.feishu_manager.upload_all_worksheets(worksheets_data, update_mode=update_mode)
+                success = self.feishu_manager.upload_all_worksheets(worksheets_data)
                 if success:
                     print(f"✅ CSV文件已成功上传到飞书表格")
                     share_url = self.feishu_manager.get_share_url()
@@ -2757,9 +2729,12 @@ class BinanceTokenScreenerV1:
             self.display_results(datasets, enhanced_df, final_files, offline=True)
             return datasets
         else:
-            # 自动上传到飞书表格（不再询问）
-            print("\n🔗 正在上传到飞书表格...")
-            upload_choice = 'y'  # 始终上传
+            # 询问是否上传到飞书表格（自动模式下默认上传）
+            if self.auto_mode:
+                upload_choice = 'y'
+                print("\n🤖 自动模式：默认上传到飞书表格")
+            else:
+                upload_choice = input("\n🔗 是否上传到飞书表格? (y/n, 默认n): ").strip().lower()
 
             if upload_choice == 'y':
                 # 将数据文件上传到飞书表格

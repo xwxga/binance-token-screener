@@ -108,61 +108,6 @@ class FeishuManager:
         except Exception as e:
             raise Exception(f"获取访问令牌失败: {e}")
     
-    def update_spreadsheet_permission(self, spreadsheet_token: str = None) -> bool:
-        """
-        更新电子表格权限，设置为"任何有链接的人可查看或编辑"
-        
-        Args:
-            spreadsheet_token: 表格token（可选，默认使用当前表格）
-            
-        Returns:
-            是否成功更新权限
-        """
-        token = spreadsheet_token or self.spreadsheet_token
-        if not token:
-            print("❌ 没有可用的表格token")
-            return False
-            
-        self._get_access_token()
-        self._rate_limit()
-        
-        # 使用drive API更新权限 - type必须作为查询参数
-        url = f"{self.base_url}/drive/v1/permissions/{token}/public"
-        
-        headers = {
-            "Authorization": f"Bearer {self.access_token}",
-            "Content-Type": "application/json"
-        }
-        
-        # type作为查询参数（文档类型：sheet表示电子表格）
-        params = {"type": "sheet"}
-        
-        # body中包含权限设置
-        data = {
-            "link_share_entity": "anyone_editable",  # 任何人可编辑
-            "external_access_entity": "open",  # 开放外部访问（可选）
-            "security_entity": "anyone_can_edit"  # 任何人可编辑（可选）
-        }
-        
-        try:
-            # 使用PATCH方法，type在查询参数中
-            response = requests.patch(url, json=data, headers=headers, params=params)
-            
-            if response.status_code == 200:
-                result = response.json()
-                if result.get('code') == 0:
-                    print(f"✅ 成功设置表格权限: 任何有链接的人可编辑")
-                    return True
-                else:
-                    print(f"⚠️ 设置权限失败: {result.get('msg', 'Unknown error')}")
-                    return False
-            else:
-                print(f"⚠️ 权限更新请求失败: HTTP {response.status_code}")
-                return False
-        except Exception as e:
-            print(f"⚠️ 更新权限时出错: {e}")
-            return False
-    
     def create_spreadsheet(self, title: str) -> str:
         """
         创建新的电子表格
@@ -205,10 +150,6 @@ class FeishuManager:
                 
                 print(f"✅ 创建飞书表格: {title}")
                 print(f"📎 表格Token: {self.spreadsheet_token}")
-                
-                # 自动更新权限为任何有链接的人可编辑
-                self.update_spreadsheet_permission(self.spreadsheet_token)
-                
                 return self.spreadsheet_token
             else:
                 raise Exception(f"创建表格失败: {result.get('msg')}")
@@ -548,34 +489,28 @@ class FeishuManager:
         
         return success_count > 0
     
-    def upload_all_worksheets(self, worksheets_data: Dict[str, pd.DataFrame], update_mode: bool = False) -> bool:
+    def upload_all_worksheets(self, worksheets_data: Dict[str, pd.DataFrame]) -> bool:
         """
         批量上传多个工作表
-
+        
         Args:
             worksheets_data: {sheet_name: DataFrame} 字典
-            update_mode: 是否为更新模式（清空现有数据后重写）
-
+            
         Returns:
             是否全部成功
         """
         success_count = 0
         total_count = len(worksheets_data)
-
-        if update_mode:
-            print(f"\n🔄 更新模式: 清空并重新写入 {total_count} 个工作表到飞书...")
-            # 更新模式下，先删除所有现有的sheets（除了第一个），然后重新创建
-            self._clear_all_sheets()
-        else:
-            print(f"\n📤 开始上传 {total_count} 个工作表到飞书...")
-
+        
+        print(f"\n📤 开始上传 {total_count} 个工作表到飞书...")
+        
         # 首先查询现有的sheets
         if self.spreadsheet_token and not self.default_sheet_id:
             self._query_existing_sheets()
-
+        
         # 标记是否是第一个工作表
         is_first = True
-
+        
         for sheet_name, df in worksheets_data.items():
             if df is not None and not df.empty:
                 try:
@@ -586,14 +521,14 @@ class FeishuManager:
                             print(f"  ✅ 重命名默认Sheet为: {sheet_name}")
                         else:
                             print(f"  ⚠️ 无法重命名默认Sheet，保持Sheet1")
-
+                        
                         # 记录这个映射
                         self.sheet_ids[sheet_name] = self.default_sheet_id
-
+                        
                         # 写入数据
                         if self._write_data_only(sheet_name, df):
                             success_count += 1
-
+                        
                         is_first = False
                     else:
                         # 创建新的工作表并写入数据
@@ -601,21 +536,20 @@ class FeishuManager:
                             success_count += 1
                 except Exception as e:
                     print(f"    ❌ {sheet_name} 上传失败: {e}")
-
+        
         print(f"\n📊 上传完成: {success_count}/{total_count} 个工作表成功")
-
+        
         # 显示分享链接
         share_url = self.get_share_url()
         if share_url:
             print(f"🔗 飞书表格链接: {share_url}")
-            if not update_mode:
-                print(f"\n💡 权限设置提示:")
-                print(f"   1. 打开上述链接")
-                print(f"   2. 点击右上角'分享'按钮")
-                print(f"   3. 选择'链接分享'")
-                print(f"   4. 设置为'获得链接的人可编辑'")
-                print(f"   5. 复制链接分享给需要的人")
-
+            print(f"\n💡 权限设置提示:")
+            print(f"   1. 打开上述链接")
+            print(f"   2. 点击右上角'分享'按钮")
+            print(f"   3. 选择'链接分享'")
+            print(f"   4. 设置为'获得链接的人可编辑'")
+            print(f"   5. 复制链接分享给需要的人")
+        
         return success_count == total_count
     
     def _query_existing_sheets(self):
@@ -644,93 +578,6 @@ class FeishuManager:
         except Exception:
             pass
     
-    def open_existing_spreadsheet(self, spreadsheet_token: str) -> bool:
-        """
-        打开现有的飞书表格
-
-        Args:
-            spreadsheet_token: 表格token
-
-        Returns:
-            是否成功打开
-        """
-        self.spreadsheet_token = spreadsheet_token
-
-        # 验证表格是否存在
-        self._get_access_token()
-        self._rate_limit()
-
-        url = f"{self.base_url}/sheets/v3/spreadsheets/{spreadsheet_token}"
-        headers = {
-            "Authorization": f"Bearer {self.access_token}",
-            "Content-Type": "application/json"
-        }
-
-        try:
-            response = requests.get(url, headers=headers)
-            if response.status_code == 200:
-                result = response.json()
-                if result.get('code') == 0:
-                    spreadsheet = result.get('data', {}).get('spreadsheet', {})
-                    title = spreadsheet.get('title', '未知')
-                    print(f"✅ 成功打开现有表格: {title}")
-                    print(f"📎 表格Token: {spreadsheet_token}")
-
-                    # 查询现有sheets
-                    self._query_existing_sheets()
-                    return True
-                else:
-                    print(f"❌ 无法打开表格: {result.get('msg')}")
-                    return False
-            else:
-                print(f"❌ 表格不存在或无权限访问")
-                return False
-        except Exception as e:
-            print(f"❌ 打开表格失败: {e}")
-            return False
-
-    def _clear_all_sheets(self) -> None:
-        """
-        清空所有工作表（删除除第一个外的所有sheet）
-        """
-        if not self.spreadsheet_token:
-            return
-
-        # 查询所有现有的sheets
-        self._get_access_token()
-        self._rate_limit()
-
-        url = f"{self.base_url}/sheets/v3/spreadsheets/{self.spreadsheet_token}/sheets/query"
-        headers = {
-            "Authorization": f"Bearer {self.access_token}",
-            "Content-Type": "application/json"
-        }
-
-        try:
-            response = requests.get(url, headers=headers)
-            if response.status_code == 200:
-                result = response.json()
-                if result.get('code') == 0:
-                    sheets = result.get('data', {}).get('sheets', [])
-
-                    # 保留第一个sheet，删除其他所有sheets
-                    if len(sheets) > 0:
-                        self.default_sheet_id = sheets[0].get('sheet_id')
-                        self.sheet_ids.clear()
-
-                        # 删除其他sheets
-                        for i in range(1, len(sheets)):
-                            sheet_id = sheets[i].get('sheet_id')
-                            sheet_title = sheets[i].get('title', f'Sheet{i+1}')
-                            if self.delete_sheet(sheet_id):
-                                print(f"  ✅ 删除工作表: {sheet_title}")
-                            else:
-                                print(f"  ⚠️ 无法删除工作表: {sheet_title}")
-
-                    print(f"  📝 保留默认Sheet准备更新")
-        except Exception as e:
-            print(f"⚠️ 清空工作表时出错: {e}")
-
     def _write_data_only(self, sheet_name: str, df: pd.DataFrame) -> bool:
         """只写入数据，不创建新sheet（用于默认sheet）"""
         if not self.spreadsheet_token:
