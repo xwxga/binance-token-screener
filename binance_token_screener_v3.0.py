@@ -22,7 +22,7 @@ Version 3.0 (August 09, 2025):
 - Production-ready with full bug fixes
 
 Author: Binance Token Analysis Team
-Version: 2.0
+Version: 3.0
 Date: 2025-08-09
 """
 
@@ -49,10 +49,20 @@ try:
 except ImportError:
     TelegramNotifier = None
 
+# 配置代理（如果环境变量中有设置）
+proxies = None
+if os.getenv('HTTP_PROXY') or os.getenv('HTTPS_PROXY'):
+    proxies = {}
+    if os.getenv('HTTP_PROXY'):
+        proxies['http'] = os.getenv('HTTP_PROXY')
+    if os.getenv('HTTPS_PROXY'):
+        proxies['https'] = os.getenv('HTTPS_PROXY')
+    print(f"🌐 使用代理服务器: {proxies.get('https', proxies.get('http'))}")
+
 class BinanceTokenScreenerV1:
     """
-    Binance Token Screener v2.0 - Production Release
-    OAuth-based token analysis system with CoinGecko integration
+    Binance Token Screener v3.0 - Production Release
+    Feishu-based token analysis system with CoinGecko integration
     """
     
     def __init__(self, auto_mode=False):
@@ -253,7 +263,7 @@ class BinanceTokenScreenerV1:
     
     def display_version_info(self):
         """显示版本和功能信息"""
-        print("🎯 币安代币筛选器 v2.0 - 生产版本")
+        print("🎯 币安代币筛选器 v3.0 - 生产版本")
         print("=" * 80)
         print(f"📅 发布日期: {self.release_date}")
         print(f"🔐 认证方式: OAuth (个人谷歌账户)")
@@ -266,7 +276,7 @@ class BinanceTokenScreenerV1:
         print("  ✅ 实时资金费率")
         print("  ✅ 智能异常检测与颜色标注")
         print("  ✅ 每日独立谷歌表格文件")
-        print("🆕 v2.0 核心功能:")
+        print("🆕 v3.0 核心功能:")
         print("  ✅ 修复OI显示为M/B格式")
         print("  ✅ 增强历史涨幅榜（29列格式）")
         print("  ✅ 准确的交易量数据计算")
@@ -465,7 +475,7 @@ class BinanceTokenScreenerV1:
         funding_rates = {}
 
         try:
-            response = requests.get("https://fapi.binance.com/fapi/v1/premiumIndex", timeout=10)
+            response = requests.get("https://fapi.binance.com/fapi/v1/premiumIndex", timeout=10, proxies=proxies)
             if response.status_code == 200:
                 data = response.json()
 
@@ -491,7 +501,7 @@ class BinanceTokenScreenerV1:
 
         try:
             # 直接使用24小时行情端点获取期货交易对列表
-            response = requests.get("https://fapi.binance.com/fapi/v1/ticker/24hr", timeout=10)
+            response = requests.get("https://fapi.binance.com/fapi/v1/ticker/24hr", timeout=10, proxies=proxies)
             if response.status_code == 200:
                 data = response.json()
 
@@ -532,8 +542,8 @@ class BinanceTokenScreenerV1:
                 for symbol in ordered_symbols:
                     try:
                         # 同时获取持仓量和价格
-                        oi_response = requests.get(f"https://fapi.binance.com/fapi/v1/openInterest?symbol={symbol}", timeout=5)
-                        price_response = requests.get(f"https://fapi.binance.com/fapi/v1/ticker/price?symbol={symbol}", timeout=5)
+                        oi_response = requests.get(f"https://fapi.binance.com/fapi/v1/openInterest?symbol={symbol}", timeout=5, proxies=proxies)
+                        price_response = requests.get(f"https://fapi.binance.com/fapi/v1/ticker/price?symbol={symbol}", timeout=5, proxies=proxies)
 
                         if oi_response.status_code == 200 and price_response.status_code == 200:
                             oi_info = oi_response.json()
@@ -606,7 +616,7 @@ class BinanceTokenScreenerV1:
             # 1. 获取现货数据
             print(f"📈 获取前{self.spot_count}个现货交易对...")
             spot_url = "https://api.binance.com/api/v3/ticker/24hr"
-            spot_response = requests.get(spot_url, timeout=10)
+            spot_response = requests.get(spot_url, timeout=10, proxies=proxies)
 
             if spot_response.status_code == 418:
                 # Handle rate limit ban
@@ -634,7 +644,7 @@ class BinanceTokenScreenerV1:
             # 2. 获取期货数据
             print(f"📊 获取前{self.futures_count}个期货交易对...")
             futures_url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
-            futures_response = requests.get(futures_url, timeout=10)
+            futures_response = requests.get(futures_url, timeout=10, proxies=proxies)
             
             if futures_response.status_code != 200:
                 print(f"❌ 获取期货数据失败 (状态码: {futures_response.status_code})")
@@ -858,8 +868,8 @@ class BinanceTokenScreenerV1:
                 # 如果批量获取的OI为0，尝试单独获取
                 if open_interest == 0:
                     try:
-                        single_oi_response = requests.get(f"https://fapi.binance.com/fapi/v1/openInterest?symbol={symbol}", timeout=3)
-                        single_price_response = requests.get(f"https://fapi.binance.com/fapi/v1/ticker/price?symbol={symbol}", timeout=3)
+                        single_oi_response = requests.get(f"https://fapi.binance.com/fapi/v1/openInterest?symbol={symbol}", timeout=3, proxies=proxies)
+                        single_price_response = requests.get(f"https://fapi.binance.com/fapi/v1/ticker/price?symbol={symbol}", timeout=3, proxies=proxies)
                         
                         if single_oi_response.status_code == 200 and single_price_response.status_code == 200:
                             single_oi_info = single_oi_response.json()
@@ -970,7 +980,7 @@ class BinanceTokenScreenerV1:
                 'limit': limit
             }
 
-            response = requests.get(url, params=params, timeout=10)
+            response = requests.get(url, params=params, timeout=10, proxies=proxies)
             if response.status_code == 200:
                 data = response.json()
                 klines = []
@@ -1000,7 +1010,7 @@ class BinanceTokenScreenerV1:
                 'limit': hours
             }
 
-            response = requests.get(url, params=params, timeout=10)
+            response = requests.get(url, params=params, timeout=10, proxies=proxies)
             if response.status_code == 200:
                 data = response.json()
                 return [float(item['sumOpenInterest']) for item in data]
@@ -3040,9 +3050,9 @@ class BinanceTokenScreenerV1:
         return futures_df
 
 def main():
-    """主函数 - v2.0入口点"""
+    """主函数 - v3.0入口点"""
     # 解析命令行参数
-    parser = argparse.ArgumentParser(description='币安代币筛选器 v2.0')
+    parser = argparse.ArgumentParser(description='币安代币筛选器 v3.0')
     parser.add_argument('--auto', action='store_true', 
                         help='自动模式运行（跳过所有用户输入，使用默认值）')
     parser.add_argument('--spot-count', type=int, default=80,
@@ -3051,8 +3061,8 @@ def main():
                         help='期货代币数量（默认: 80）')
     args = parser.parse_args()
 
-    print("🚀 启动币安代币筛选器 v2.0")
-    print("生产版本，支持OAuth认证和CoinGecko集成")
+    print("🚀 启动币安代币筛选器 v3.0")
+    print("生产版本，支持飞书集成和CoinGecko数据")
     print("=" * 80)
     
     if args.auto:
