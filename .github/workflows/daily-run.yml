@@ -17,6 +17,11 @@ jobs:
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       TELEGRAM_ENABLED: ${{ secrets.TELEGRAM_ENABLED }}
+      FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+      FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+      FEISHU_SPREADSHEET_TOKEN: ${{ secrets.FEISHU_SPREADSHEET_TOKEN }}
+      FEISHU_SPREADSHEET_URL: ${{ secrets.FEISHU_SPREADSHEET_URL }}
+      FEISHU_TOKEN_JSON: ${{ secrets.FEISHU_TOKEN_JSON }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -32,9 +37,6 @@ jobs:
           pip install -r requirements.txt
 
       - name: Generate Feishu credentials
-        env:
-          FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
-          FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
         run: |
           if [ -z "$FEISHU_APP_ID" ] || [ -z "$FEISHU_APP_SECRET" ]; then
             echo "Feishu credentials are not configured." >&2
@@ -44,18 +46,13 @@ jobs:
             "$FEISHU_APP_ID" "$FEISHU_APP_SECRET" > feishu_config.json
 
       - name: Configure Feishu spreadsheet target
-        if: ${{ secrets.FEISHU_SPREADSHEET_TOKEN != '' }}
-        env:
-          FEISHU_SPREADSHEET_TOKEN: ${{ secrets.FEISHU_SPREADSHEET_TOKEN }}
-          FEISHU_SPREADSHEET_URL: ${{ secrets.FEISHU_SPREADSHEET_URL }}
+        if: ${{ env.FEISHU_SPREADSHEET_TOKEN != '' }}
         run: |
           printf '{\n  "spreadsheet_token": "%s",\n  "spreadsheet_url": "%s",\n  "description": "Configured by GitHub Actions"\n}\n' \
             "$FEISHU_SPREADSHEET_TOKEN" "$FEISHU_SPREADSHEET_URL" > feishu_spreadsheet_config.json
 
       - name: Restore Feishu OAuth token
-        if: ${{ secrets.FEISHU_TOKEN_JSON != '' }}
-        env:
-          FEISHU_TOKEN_JSON: ${{ secrets.FEISHU_TOKEN_JSON }}
+        if: ${{ env.FEISHU_TOKEN_JSON != '' }}
         run: |
           printf '%s' "$FEISHU_TOKEN_JSON" > token.json
 
