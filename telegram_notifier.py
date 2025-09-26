@@ -8,6 +8,7 @@ import json
 import requests
 import logging
 from datetime import datetime
+from pathlib import Path
 import glob
 from typing import List, Dict, Optional, Tuple
 
@@ -15,9 +16,11 @@ class TelegramNotifier:
     def __init__(self, config_file='telegram_config.json'):
         """初始化Telegram通知器"""
         self.config_file = config_file
-        self.config = self.load_config()
         self.logger = self.setup_logger()
-        self.project_path = "/Users/wenxiangxu/Desktop/alpha_team_code/binance_token_screener"
+        # Allow overriding project path through env for CI usage; default to repo root
+        default_path = Path(__file__).resolve().parent
+        self.project_path = Path(os.getenv("PROJECT_PATH", str(default_path)))
+        self.config = self.load_config()
         
     def setup_logger(self):
         """设置日志记录器"""
@@ -29,19 +32,39 @@ class TelegramNotifier:
     
     def load_config(self) -> Dict:
         """加载Telegram配置"""
-        if os.path.exists(self.config_file):
+        env_token = os.getenv("TELEGRAM_BOT_TOKEN")
+        env_chat_id = os.getenv("TELEGRAM_CHAT_ID")
+        env_enabled = os.getenv("TELEGRAM_ENABLED")
+
+        if env_token and env_chat_id:
+            enabled = True
+            if env_enabled is not None:
+                enabled = env_enabled.strip().lower() not in {"0", "false", "no"}
+            return {
+                "bot_token": env_token,
+                "chat_id": env_chat_id,
+                "enabled": enabled
+            }
+
+        config_path = Path(self.config_file)
+
+        if config_path.exists():
             with open(self.config_file, 'r', encoding='utf-8') as f:
                 return json.load(f)
         else:
             # 创建默认配置
             default_config = {
-                "bot_token": "8169474631:AAGJzotGIacWhBwi943mj_Wq1lus1hc3GpU",
+                "bot_token": "",
                 "chat_id": "",  # 需要通过setup_telegram.py获取
                 "enabled": True
             }
-            with open(self.config_file, 'w', encoding='utf-8') as f:
-                json.dump(default_config, f, indent=2)
-            self.logger.warning(f"创建了配置文件 {self.config_file}，请运行 setup_telegram.py 获取chat_id")
+            try:
+                with open(self.config_file, 'w', encoding='utf-8') as f:
+                    json.dump(default_config, f, indent=2)
+                self.logger.warning(f"创建了配置文件 {self.config_file}，请运行 setup_telegram.py 获取chat_id")
+            except OSError:
+                # 在只读环境（例如CI）中忽略文件写入失败
+                self.logger.warning("未能写入 telegram_config.json，使用默认占位配置")
             return default_config
     
     def get_today_logs(self) -> Tuple[List[str], Optional[str], Optional[str]]:
@@ -52,34 +75,34 @@ class TelegramNotifier:
         feishu_url = None
         
         # 1. 主程序运行日志
-        analysis_folder = f"{self.project_path}/币安代币分析结果_{today}"
+        analysis_folder = self.project_path / f"币安代币分析结果_{today}"
         if os.path.exists(analysis_folder):
             # 获取日志文件
-            log_folder = os.path.join(analysis_folder, "日志文件")
+            log_folder = analysis_folder / "日志文件"
             if os.path.exists(log_folder):
-                logs = glob.glob(os.path.join(log_folder, "*.log"))
+                logs = glob.glob(str(log_folder / "*.log"))
                 log_files.extend(logs)
-            
+
             # 获取Excel文件
-            excel_folder = os.path.join(analysis_folder, "Excel文件")
+            excel_folder = analysis_folder / "Excel文件"
             if os.path.exists(excel_folder):
-                excel_files = glob.glob(os.path.join(excel_folder, "*.xlsx"))
+                excel_files = glob.glob(str(excel_folder / "*.xlsx"))
                 if excel_files:
                     excel_file = max(excel_files, key=os.path.getctime)
-        
+
         # 2. 调度器日志
-        scheduler_log = f"{self.project_path}/simple_scheduler.log"
+        scheduler_log = self.project_path / "simple_scheduler.log"
         if os.path.exists(scheduler_log):
             # 只读取今天的部分
             today_str = datetime.now().strftime('%Y-%m-%d')
-            temp_log = f"{self.project_path}/scheduler_today.log"
+            temp_log = self.project_path / "scheduler_today.log"
             with open(scheduler_log, 'r', encoding='utf-8') as f:
                 lines = f.readlines()
                 today_lines = [line for line in lines if today_str in line or not line.startswith('20')]
                 if today_lines:
                     with open(temp_log, 'w', encoding='utf-8') as tf:
                         tf.writelines(today_lines[-500:])  # 最多500行
-                    log_files.append(temp_log)
+                    log_files.append(str(temp_log))
         
         # 3. 从日志中提取飞书URL
         if log_files:

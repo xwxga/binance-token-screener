@@ -81,6 +81,22 @@ python binance_token_screener_v2.0.py
 ./start_simple.sh stop
 ```
 
+#### GitHub Actions (Cloud) / GitHub Actions（云端）
+
+自动化部署也可以通过 GitHub Actions 完成：
+
+1. 将仓库推送到 GitHub / Push the repo to GitHub.
+2. 在仓库 `Settings → Secrets and variables → Actions` 中添加凭据：
+   - `FEISHU_APP_ID`, `FEISHU_APP_SECRET`
+   - `FEISHU_SPREADSHEET_TOKEN`, `FEISHU_SPREADSHEET_URL`
+   - 可选：`FEISHU_TOKEN_JSON`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `HTTP_PROXY`, `HTTPS_PROXY`
+3. 默认启用 `.github/workflows/daily-run.yml`：
+   - 每天北京时间 07:45 自动运行（UTC 时间 23:45）。
+   - 也可以通过 GitHub Actions 面板手动触发。
+4. 运行日志和生成的 Excel/CSV 会作为 Artifact 上传，可在 Actions 界面下载。
+
+> ✅ 云端运行时脚本会读取上述 Secrets 并自动生成 `feishu_config.json` 与可选的 `feishu_spreadsheet_config.json`，本地无需额外改动。
+
 ## Security Notes / 安全说明
 
 - **NEVER commit credentials**: `feishu_config.json`, `oauth_credentials.json` and `token.json` are in `.gitignore`
