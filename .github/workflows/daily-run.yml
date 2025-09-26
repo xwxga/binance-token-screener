@@ -40,12 +40,8 @@ jobs:
             echo "Feishu credentials are not configured." >&2
             exit 1
           fi
-          cat > feishu_config.json <<EOF
-          {
-            "app_id": "$FEISHU_APP_ID",
-            "app_secret": "$FEISHU_APP_SECRET"
-          }
-EOF
+          printf '{\n  "app_id": "%s",\n  "app_secret": "%s"\n}\n' \
+            "$FEISHU_APP_ID" "$FEISHU_APP_SECRET" > feishu_config.json
 
       - name: Configure Feishu spreadsheet target
         if: ${{ secrets.FEISHU_SPREADSHEET_TOKEN != '' }}
@@ -53,13 +49,8 @@ EOF
           FEISHU_SPREADSHEET_TOKEN: ${{ secrets.FEISHU_SPREADSHEET_TOKEN }}
           FEISHU_SPREADSHEET_URL: ${{ secrets.FEISHU_SPREADSHEET_URL }}
         run: |
-          cat > feishu_spreadsheet_config.json <<EOF
-          {
-            "spreadsheet_token": "$FEISHU_SPREADSHEET_TOKEN",
-            "spreadsheet_url": "$FEISHU_SPREADSHEET_URL",
-            "description": "Configured by GitHub Actions"
-          }
-EOF
+          printf '{\n  "spreadsheet_token": "%s",\n  "spreadsheet_url": "%s",\n  "description": "Configured by GitHub Actions"\n}\n' \
+            "$FEISHU_SPREADSHEET_TOKEN" "$FEISHU_SPREADSHEET_URL" > feishu_spreadsheet_config.json
 
       - name: Restore Feishu OAuth token
         if: ${{ secrets.FEISHU_TOKEN_JSON != '' }}
