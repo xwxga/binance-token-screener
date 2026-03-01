@@ -6,10 +6,9 @@ import argparse
 import os
 import subprocess
 import sys
-from datetime import datetime
+import tempfile
 from pathlib import Path
-
-
+from datetime import datetime
 DEFAULT_OUTPUT_ROOT = Path("./v4_outputs")
 DEFAULT_V3_ROOT = Path(".")
 
@@ -69,7 +68,26 @@ def main():
             "--top-gainers",
             str(args.top_gainers),
         ]
-        subprocess.run(v3_cmd, check=True)
+        env = os.environ.copy()
+        # Ensure GCS is disabled for v3 runs
+        env.pop("GCS_BUCKET", None)
+        env.pop("GCS_HISTORY_BLOB", None)
+        env.pop("GCS_OUTPUT_PREFIX", None)
+
+        # Provide a stub google.cloud.storage module to avoid hard dependency
+        with tempfile.TemporaryDirectory() as td:
+            stub_root = Path(td)
+            (stub_root / "google" / "cloud").mkdir(parents=True, exist_ok=True)
+            (stub_root / "google" / "__init__.py").write_text("", encoding="utf-8")
+            (stub_root / "google" / "cloud" / "__init__.py").write_text("", encoding="utf-8")
+            (stub_root / "google" / "cloud" / "storage.py").write_text(
+                "class Client:\\n"
+                "    def __init__(self, *args, **kwargs):\\n"
+                "        raise RuntimeError('GCS disabled in v4 runner')\\n",
+                encoding="utf-8",
+            )
+            env["PYTHONPATH"] = f\"{stub_root}{os.pathsep}{env.get('PYTHONPATH','')}\"
+            subprocess.run(v3_cmd, check=True, env=env)
 
     excel_path = Path(args.input) if args.input else find_latest_excel_from_v3(v3_root)
     report_basename = f"report_{ts}"

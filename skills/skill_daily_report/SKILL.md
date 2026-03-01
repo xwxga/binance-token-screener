@@ -5,6 +5,7 @@ Run the Binance Token Screener v4.0 pipeline daily and produce both HTML and PDF
 
 ## Inputs
 - `--run-v3` (optional): run v3 first to generate Feishu + Excel
+- v4 runner disables Google Cloud usage during v3 run
 - Excel path (optional). If not provided, the latest v3 output Excel is used:
   `币安代币分析结果_YYYYMMDD/Excel文件/币安代币分析_YYYYMMDD_HHMM.xlsx`
 - `top` (optional, default 8)
