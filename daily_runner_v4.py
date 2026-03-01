@@ -81,9 +81,9 @@ def main():
             (stub_root / "google" / "__init__.py").write_text("", encoding="utf-8")
             (stub_root / "google" / "cloud" / "__init__.py").write_text("", encoding="utf-8")
             (stub_root / "google" / "cloud" / "storage.py").write_text(
-                "class Client:\\n"
-                "    def __init__(self, *args, **kwargs):\\n"
-                "        raise RuntimeError('GCS disabled in v4 runner')\\n",
+                "class Client:\n"
+                "    def __init__(self, *args, **kwargs):\n"
+                "        raise RuntimeError('GCS disabled in v4 runner')\n",
                 encoding="utf-8",
             )
             env["PYTHONPATH"] = f"{stub_root}{os.pathsep}{env.get('PYTHONPATH','')}"
