@@ -86,7 +86,7 @@ def main():
                 "        raise RuntimeError('GCS disabled in v4 runner')\\n",
                 encoding="utf-8",
             )
-            env["PYTHONPATH"] = f\"{stub_root}{os.pathsep}{env.get('PYTHONPATH','')}\"
+            env["PYTHONPATH"] = f"{stub_root}{os.pathsep}{env.get('PYTHONPATH','')}"
             subprocess.run(v3_cmd, check=True, env=env)
 
     excel_path = Path(args.input) if args.input else find_latest_excel_from_v3(v3_root)
