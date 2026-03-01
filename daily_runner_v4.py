@@ -40,7 +40,7 @@ def main():
     parser.add_argument("--v3-python", default="", help="Python path for v3.0 (optional)")
     parser.add_argument("--spot-count", type=int, default=80, help="v3 spot count")
     parser.add_argument("--futures-count", type=int, default=80, help="v3 futures count")
-    parser.add_argument("--top-gainers", type=int, default=5, help="v3 top gainers")
+    parser.add_argument("--top-gainers", type=int, default=20, help="v3 top gainers")
     parser.add_argument("--input", default="", help="Excel path (optional)")
     parser.add_argument("--v3-root", default=str(DEFAULT_V3_ROOT), help="Root directory for v3 outputs")
     parser.add_argument("--output-root", default=str(DEFAULT_OUTPUT_ROOT), help="Output root directory")
