@@ -5,6 +5,7 @@ Finds the latest Excel in ./report and generates HTML+PDF into a timestamped out
 import argparse
 import os
 import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -36,6 +37,11 @@ def find_latest_excel_from_v3(v3_root: Path) -> Path:
 
 def main():
     parser = argparse.ArgumentParser(description="Daily runner for v4.0")
+    parser.add_argument("--run-v3", action="store_true", help="Run v3.0 first to generate Excel + Feishu")
+    parser.add_argument("--v3-python", default="", help="Python path for v3.0 (optional)")
+    parser.add_argument("--spot-count", type=int, default=80, help="v3 spot count")
+    parser.add_argument("--futures-count", type=int, default=80, help="v3 futures count")
+    parser.add_argument("--top-gainers", type=int, default=5, help="v3 top gainers")
     parser.add_argument("--input", default="", help="Excel path (optional)")
     parser.add_argument("--v3-root", default=str(DEFAULT_V3_ROOT), help="Root directory for v3 outputs")
     parser.add_argument("--output-root", default=str(DEFAULT_OUTPUT_ROOT), help="Output root directory")
@@ -50,11 +56,26 @@ def main():
     output_dir = output_root / ts
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    if args.run_v3:
+        v3_python = args.v3_python or sys.executable
+        v3_cmd = [
+            v3_python,
+            "binance_token_screener_v3.0.py",
+            "--auto",
+            "--spot-count",
+            str(args.spot_count),
+            "--futures-count",
+            str(args.futures_count),
+            "--top-gainers",
+            str(args.top_gainers),
+        ]
+        subprocess.run(v3_cmd, check=True)
+
     excel_path = Path(args.input) if args.input else find_latest_excel_from_v3(v3_root)
     report_basename = f"report_{ts}"
 
     cmd = [
-        "python3",
+        sys.executable,
         "binance_token_screener_v4.0.py",
         "--input",
         str(excel_path),

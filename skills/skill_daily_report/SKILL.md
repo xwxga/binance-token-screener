@@ -4,6 +4,7 @@
 Run the Binance Token Screener v4.0 pipeline daily and produce both HTML and PDF reports.
 
 ## Inputs
+- `--run-v3` (optional): run v3 first to generate Feishu + Excel
 - Excel path (optional). If not provided, the latest v3 output Excel is used:
   `币安代币分析结果_YYYYMMDD/Excel文件/币安代币分析_YYYYMMDD_HHMM.xlsx`
 - `top` (optional, default 8)
@@ -19,6 +20,7 @@ Run the Binance Token Screener v4.0 pipeline daily and produce both HTML and PDF
 ## Command
 ```bash
 python3 daily_runner_v4.py \
+  --run-v3 \
   --v3-root . \
   --output-root ./v4_outputs \
   --top 8 \
