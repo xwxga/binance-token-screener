@@ -1,17 +1,16 @@
-# Binance Token Screener v3.0 - Feishu Edition
+# Binance Token Screener v4.0 - Futures Report Edition
 
-A production-ready cryptocurrency analysis system that fetches real-time data from Binance APIs, performs multi-dimensional analysis, and generates comprehensive reports with Feishu (Lark) integration.
+A production-ready cryptocurrency analysis system that fetches real-time data from Binance APIs, performs multi-dimensional analysis, and generates HTML + PDF reports for futures monitoring.
 
-币安代币筛选器 - 生产就绪的加密货币分析系统，从币安API获取实时数据，执行多维度分析，并生成带有飞书表格集成的综合报告。
+币安代币筛选器 - 生产就绪的加密货币分析系统，从币安API获取实时数据，执行多维度分析，并生成期货监控的 HTML + PDF 报告。
 
 ## Features / 功能特点
 
 - **Real-time Data Fetching / 实时数据获取**: Fetches spot and futures market data from Binance APIs
 - **Market Cap Integration / 市值集成**: Real market cap data from CoinGecko API with caching
 - **Multi-dimensional Analysis / 多维度分析**: 8 different analysis perspectives including volume, market cap, gainers/losers
-- **Automated Scheduling / 自动调度**: Daily runs at 7:45 AM with simple scheduler
-- **Feishu Integration / 飞书表格集成**: Automatic upload of analysis results to Feishu spreadsheets
-- **Telegram Notifications / Telegram通知**: Automatic daily reports and error alerts via Telegram bot
+- **Automated Scheduling / 自动调度**: Daily runs via OpenClaw or local runner
+- **HTML + PDF Reports / 报告输出**: 4h K线 + 成交量 + OI + MACD + RSI
 - **Anomaly Detection / 异常检测**: Identifies unusual volume patterns and price movements
 
 ## Quick Start / 快速开始
@@ -20,7 +19,7 @@ A production-ready cryptocurrency analysis system that fetches real-time data fr
 
 - Python 3.9+
 - Conda environment (recommended)
-- Feishu App credentials (App ID and App Secret)
+- Chrome/Chromium (for PDF rendering)
 - Stable internet connection
 
 ### Installation / 安装
@@ -38,64 +37,25 @@ conda activate crypto_project
 pip install -r requirements.txt
 ```
 
-3. Setup Feishu Config / 设置飞书配置:
-```bash
-# Create feishu_config.json with your App ID and App Secret
-echo '{
-  "app_id": "your_app_id",
-  "app_secret": "your_app_secret"
-}' > feishu_config.json
-```
-
-4. Setup Telegram Notifications (Optional) / 设置Telegram通知（可选）:
-```bash
-# Run setup script to configure Telegram bot
-python setup_telegram.py
-# Or test with existing configuration
-python telegram_notifier.py --test
-```
+3. (Optional) Setup Feishu Config / 设置飞书配置（可选）:
+`feishu_config.json` 不提交到 Git，需单独同步到网关主机。
 
 ### Usage / 使用方法
 
 #### Manual Run / 手动运行
 ```bash
-# For Feishu version (v3.0)
-python binance_token_screener_v3.0.py
-
-# For Google Sheets version (v2.0)
-python binance_token_screener_v2.0.py
+python daily_runner_v4.py \
+  --report-dir ./report \
+  --output-root ./v4_outputs \
+  --top 8 \
+  --sleep 0.15
 ```
 
 #### Automated Daily Runs / 自动每日运行
-```bash
-# Start scheduler in background
-./start_simple.sh background
-
-# Check status
-./start_simple.sh status
-
-# View logs
-./start_simple.sh logs
-
-# Stop scheduler
-./start_simple.sh stop
-```
+Use OpenClaw scheduler (recommended) or a system cron.
 
 #### GitHub Actions (Cloud) / GitHub Actions（云端）
-
-自动化部署也可以通过 GitHub Actions 完成：
-
-1. 将仓库推送到 GitHub / Push the repo to GitHub.
-2. 在仓库 `Settings → Secrets and variables → Actions` 中添加凭据：
-   - `FEISHU_APP_ID`, `FEISHU_APP_SECRET`
-   - `FEISHU_SPREADSHEET_TOKEN`, `FEISHU_SPREADSHEET_URL`
-   - 可选：`FEISHU_TOKEN_JSON`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `HTTP_PROXY`, `HTTPS_PROXY`
-3. 默认启用 `.github/workflows/daily-run.yml`：
-   - 每天北京时间 07:45 自动运行（UTC 时间 23:45）。
-   - 也可以通过 GitHub Actions 面板手动触发。
-4. 运行日志和生成的 Excel/CSV 会作为 Artifact 上传，可在 Actions 界面下载。
-
-> ✅ 云端运行时脚本会读取上述 Secrets 并自动生成 `feishu_config.json` 与可选的 `feishu_spreadsheet_config.json`，本地无需额外改动。
+Not recommended for v4.0. Use OpenClaw scheduler on gateway host.
 
 ## Security Notes / 安全说明
 
@@ -109,5 +69,5 @@ This project is for educational and research purposes only. Use at your own risk
 
 ---
 
-**Version**: 3.0  
-**Last Updated**: 2025-08-09
+**Version**: 4.0  
+**Last Updated**: 2026-03-02

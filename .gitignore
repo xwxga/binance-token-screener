@@ -49,6 +49,11 @@ scheduler_logs/
 
 # OS
 .DS_Store
+__pycache__/
+v4_outputs/
+*.log
+test_result_*.json
+archive/2025/
 Thumbs.db
 
 # Test files
