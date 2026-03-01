@@ -9,34 +9,48 @@ from datetime import datetime
 from pathlib import Path
 
 
-DEFAULT_REPORT_DIR = Path("./report")
 DEFAULT_OUTPUT_ROOT = Path("./v4_outputs")
+DEFAULT_V3_ROOT = Path(".")
 
 
-def find_latest_excel(report_dir: Path) -> Path:
-    candidates = list(report_dir.glob("*.xlsx"))
-    if not candidates:
-        raise FileNotFoundError(f"No .xlsx files found in {report_dir}")
-    return max(candidates, key=lambda p: p.stat().st_mtime)
+def _latest_by_mtime(paths):
+    return max(paths, key=lambda p: p.stat().st_mtime)
+
+
+def find_latest_excel_from_v3(v3_root: Path) -> Path:
+    # v3 outputs: 币安代币分析结果_YYYYMMDD/Excel文件/币安代币分析_YYYYMMDD_HHMM.xlsx
+    folders = sorted(v3_root.glob("币安代币分析结果_*"))
+    if not folders:
+        raise FileNotFoundError(f"No v3 output folders found in {v3_root}")
+    latest_folder = _latest_by_mtime(folders)
+    excel_dir = latest_folder / "Excel文件"
+    if not excel_dir.exists():
+        raise FileNotFoundError(f"Excel folder not found: {excel_dir}")
+    all_xlsx = list(excel_dir.glob("*.xlsx"))
+    if not all_xlsx:
+        raise FileNotFoundError(f"No .xlsx files found in {excel_dir}")
+    # Prefer non-完整版 if present; otherwise take latest
+    primary = [p for p in all_xlsx if "完整版" not in p.name]
+    return _latest_by_mtime(primary) if primary else _latest_by_mtime(all_xlsx)
 
 
 def main():
     parser = argparse.ArgumentParser(description="Daily runner for v4.0")
     parser.add_argument("--input", default="", help="Excel path (optional)")
-    parser.add_argument("--report-dir", default=str(DEFAULT_REPORT_DIR), help="Directory to search for Excel")
+    parser.add_argument("--v3-root", default=str(DEFAULT_V3_ROOT), help="Root directory for v3 outputs")
     parser.add_argument("--output-root", default=str(DEFAULT_OUTPUT_ROOT), help="Output root directory")
     parser.add_argument("--top", type=int, default=8, help="Top N candidates")
     parser.add_argument("--sleep", type=float, default=0.15, help="Sleep between requests")
     parser.add_argument("--chrome-path", default="", help="Chrome/Chromium path for PDF")
     args = parser.parse_args()
 
-    report_dir = Path(args.report_dir)
+    v3_root = Path(args.v3_root)
     output_root = Path(args.output_root)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_dir = output_root / ts
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    excel_path = Path(args.input) if args.input else find_latest_excel(report_dir)
+    excel_path = Path(args.input) if args.input else find_latest_excel_from_v3(v3_root)
     report_basename = f"report_{ts}"
 
     cmd = [

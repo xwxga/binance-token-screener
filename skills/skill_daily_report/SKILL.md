@@ -4,7 +4,8 @@
 Run the Binance Token Screener v4.0 pipeline daily and produce both HTML and PDF reports.
 
 ## Inputs
-- Excel path (optional). If not provided, the latest `.xlsx` in `./report` is used.
+- Excel path (optional). If not provided, the latest v3 output Excel is used:
+  `币安代币分析结果_YYYYMMDD/Excel文件/币安代币分析_YYYYMMDD_HHMM.xlsx`
 - `top` (optional, default 8)
 - `sleep` (optional, default 0.15)
 - `chrome_path` (optional, for PDF rendering)
@@ -18,7 +19,7 @@ Run the Binance Token Screener v4.0 pipeline daily and produce both HTML and PDF
 ## Command
 ```bash
 python3 daily_runner_v4.py \
-  --report-dir ./report \
+  --v3-root . \
   --output-root ./v4_outputs \
   --top 8 \
   --sleep 0.15
