@@ -5,13 +5,19 @@
 根据feishu_api_guide.md实现核心功能
 """
 
-import requests
 import json
 import time
 import pandas as pd
 import numpy as np
 from datetime import datetime
 from typing import List, Dict, Optional, Any
+import requests
+from requests.exceptions import (
+    RequestException,
+    ConnectionError as RequestsConnectionError,
+    Timeout,
+    SSLError,
+)
 
 class FeishuManager:
     """
@@ -25,6 +31,7 @@ class FeishuManager:
         self.access_token = None
         self.token_expires_at = 0
         self.base_url = "https://open.feishu.cn/open-apis"
+        self.session = requests.Session()
         
         # 加载配置
         self._load_config()
@@ -67,6 +74,31 @@ class FeishuManager:
             time.sleep(min_interval - time_since_last)
         
         self.last_request_time = time.time()
+
+    def _request(self, method: str, url: str, retries: int = 3, retry_backoff: float = 1.0, **kwargs) -> requests.Response:
+        """
+        封装requests请求，带自动重试，处理网络抖动
+        """
+        last_exception = None
+        for attempt in range(1, retries + 1):
+            self._rate_limit()
+            try:
+                kwargs.setdefault("timeout", 15)
+                response = self.session.request(method=method, url=url, **kwargs)
+                response.raise_for_status()
+                return response
+            except (RequestsConnectionError, Timeout, SSLError) as e:
+                last_exception = e
+                if attempt < retries:
+                    wait_seconds = retry_backoff * (2 ** (attempt - 1))
+                    print(f"    ⚠️ 网络异常({e.__class__.__name__})，{wait_seconds:.1f}s后重试 ({attempt}/{retries})")
+                    time.sleep(wait_seconds)
+                    continue
+                raise
+            except RequestException as e:
+                raise
+        if last_exception:
+            raise last_exception
     
     def _get_access_token(self):
         """获取访问令牌"""
@@ -75,8 +107,6 @@ class FeishuManager:
         # 如果token还有效，直接返回
         if self.access_token and current_time < self.token_expires_at:
             return self.access_token
-        
-        self._rate_limit()
         
         # 获取新的access token
         url = f"{self.base_url}/auth/v3/tenant_access_token/internal"
@@ -91,22 +121,20 @@ class FeishuManager:
         }
         
         try:
-            response = requests.post(url, headers=headers, json=payload)
-            response.raise_for_status()
-            
-            result = response.json()
-            
-            if result.get("code") == 0:
-                self.access_token = result.get("tenant_access_token")
-                expire = result.get("expire", 7200)
-                self.token_expires_at = current_time + expire - 300  # 提前5分钟刷新
-                print("✅ 飞书访问令牌获取成功")
-                return self.access_token
-            else:
-                raise Exception(f"获取token失败: {result.get('msg')}")
-                
-        except Exception as e:
+            response = self._request("post", url, headers=headers, json=payload, retries=3)
+        except RequestException as e:
             raise Exception(f"获取访问令牌失败: {e}")
+        
+        result = response.json()
+        
+        if result.get("code") == 0:
+            self.access_token = result.get("tenant_access_token")
+            expire = result.get("expire", 7200)
+            self.token_expires_at = current_time + expire - 300  # 提前5分钟刷新
+            print("✅ 飞书访问令牌获取成功")
+            return self.access_token
+        else:
+            raise Exception(f"获取token失败: {result.get('msg')}")
     
     def update_spreadsheet_permission(self, spreadsheet_token: str = None) -> bool:
         """
@@ -124,7 +152,6 @@ class FeishuManager:
             return False
             
         self._get_access_token()
-        self._rate_limit()
         
         # 使用drive API更新权限 - type必须作为查询参数
         url = f"{self.base_url}/drive/v1/permissions/{token}/public"
@@ -145,22 +172,22 @@ class FeishuManager:
         }
         
         try:
-            # 使用PATCH方法，type在查询参数中
-            response = requests.patch(url, json=data, headers=headers, params=params)
-            
-            if response.status_code == 200:
-                result = response.json()
-                if result.get('code') == 0:
-                    print(f"✅ 成功设置表格权限: 任何有链接的人可编辑")
-                    return True
-                else:
-                    print(f"⚠️ 设置权限失败: {result.get('msg', 'Unknown error')}")
-                    return False
-            else:
-                print(f"⚠️ 权限更新请求失败: HTTP {response.status_code}")
-                return False
-        except Exception as e:
+            response = self._request("patch", url, headers=headers, params=params, json=data)
+        except RequestException as e:
             print(f"⚠️ 更新权限时出错: {e}")
+            return False
+        
+        try:
+            result = response.json()
+        except ValueError:
+            print("⚠️ 无法解析权限设置响应")
+            return False
+        
+        if result.get('code') == 0:
+            print(f"✅ 成功设置表格权限: 任何有链接的人可编辑")
+            return True
+        else:
+            print(f"⚠️ 设置权限失败: {result.get('msg', 'Unknown error')}")
             return False
     
     def create_spreadsheet(self, title: str) -> str:
@@ -174,7 +201,6 @@ class FeishuManager:
             spreadsheet_token
         """
         self._get_access_token()
-        self._rate_limit()
         
         url = f"{self.base_url}/sheets/v3/spreadsheets"
         
@@ -186,35 +212,36 @@ class FeishuManager:
         data = {"title": title}
         
         try:
-            response = requests.post(url, headers=headers, json=data)
-            response.raise_for_status()
-            
-            result = response.json()
-            
-            if result.get("code") == 0:
-                spreadsheet = result.get("data", {}).get("spreadsheet", {})
-                self.spreadsheet_token = spreadsheet.get("spreadsheet_token")
-                
-                # 获取默认创建的sheet信息
-                sheets = spreadsheet.get("sheets", {})
-                if sheets:
-                    # 保存默认sheet的ID，稍后删除
-                    self.default_sheet_id = list(sheets.keys())[0]
-                else:
-                    self.default_sheet_id = None
-                
-                print(f"✅ 创建飞书表格: {title}")
-                print(f"📎 表格Token: {self.spreadsheet_token}")
-                
-                # 自动更新权限为任何有链接的人可编辑
-                self.update_spreadsheet_permission(self.spreadsheet_token)
-                
-                return self.spreadsheet_token
-            else:
-                raise Exception(f"创建表格失败: {result.get('msg')}")
-                
-        except Exception as e:
+            response = self._request("post", url, headers=headers, json=data)
+        except RequestException as e:
             raise Exception(f"创建电子表格失败: {e}")
+        
+        try:
+            result = response.json()
+        except ValueError:
+            raise Exception("创建电子表格失败: 无法解析飞书响应")
+        
+        if result.get("code") == 0:
+            spreadsheet = result.get("data", {}).get("spreadsheet", {})
+            self.spreadsheet_token = spreadsheet.get("spreadsheet_token")
+            
+            # 获取默认创建的sheet信息
+            sheets = spreadsheet.get("sheets", {})
+            if sheets:
+                # 保存默认sheet的ID，稍后删除
+                self.default_sheet_id = list(sheets.keys())[0]
+            else:
+                self.default_sheet_id = None
+            
+            print(f"✅ 创建飞书表格: {title}")
+            print(f"📎 表格Token: {self.spreadsheet_token}")
+            
+            # 自动更新权限为任何有链接的人可编辑
+            self.update_spreadsheet_permission(self.spreadsheet_token)
+            
+            return self.spreadsheet_token
+        else:
+            raise Exception(f"创建表格失败: {result.get('msg')}")
     
     def create_worksheet(self, sheet_name: str, row_count: int = 1000, column_count: int = 30) -> str:
         """
@@ -232,7 +259,6 @@ class FeishuManager:
             raise Exception("请先创建电子表格")
         
         self._get_access_token()
-        self._rate_limit()
         
         url = f"{self.base_url}/sheets/v3/spreadsheets/{self.spreadsheet_token}/sheets"
         
@@ -250,32 +276,33 @@ class FeishuManager:
         }
         
         try:
-            response = requests.post(url, headers=headers, json=data)
-            response.raise_for_status()
-            
-            result = response.json()
-            
-            if result.get("code") == 0:
-                sheet = result.get("data", {}).get("sheet", {})
-                sheet_id = sheet.get("sheet_id")
-                returned_title = sheet.get("title", "")  # 获取API返回的标题（如Sheet2）
-                
-                # 立即重命名为我们想要的名称
-                if returned_title != sheet_name:
-                    if self.update_sheet_properties(sheet_id, sheet_name):
-                        print(f"  ✅ 创建工作表: {sheet_name}")
-                    else:
-                        print(f"  ⚠️ 创建工作表: {returned_title} (重命名失败，应为: {sheet_name})")
-                else:
-                    print(f"  ✅ 创建工作表: {sheet_name}")
-                
-                self.sheet_ids[sheet_name] = sheet_id
-                return sheet_id
-            else:
-                raise Exception(f"创建工作表失败: {result.get('msg')}")
-                
-        except Exception as e:
+            response = self._request("post", url, headers=headers, json=data)
+        except RequestException as e:
             raise Exception(f"创建工作表 {sheet_name} 失败: {e}")
+        
+        try:
+            result = response.json()
+        except ValueError:
+            raise Exception(f"创建工作表失败: 无法解析飞书响应 ({sheet_name})")
+        
+        if result.get("code") == 0:
+            sheet = result.get("data", {}).get("sheet", {})
+            sheet_id = sheet.get("sheet_id")
+            returned_title = sheet.get("title", "")  # 获取API返回的标题（如Sheet2）
+            
+            # 立即重命名为我们想要的名称
+            if returned_title != sheet_name:
+                if self.update_sheet_properties(sheet_id, sheet_name):
+                    print(f"  ✅ 创建工作表: {sheet_name}")
+                else:
+                    print(f"  ⚠️ 创建工作表: {returned_title} (重命名失败，应为: {sheet_name})")
+            else:
+                print(f"  ✅ 创建工作表: {sheet_name}")
+            
+            self.sheet_ids[sheet_name] = sheet_id
+            return sheet_id
+        else:
+            raise Exception(f"创建工作表失败: {result.get('msg')}")
     
     def _prepare_data_for_feishu(self, df: pd.DataFrame) -> List[List[Any]]:
         """
@@ -355,7 +382,6 @@ class FeishuManager:
         range_str = f"{sheet_id}!A1:{end_col}{end_row}"
         
         self._get_access_token()
-        self._rate_limit()
         
         # 使用v2 API - 已验证可工作
         url = f"{self.base_url}/sheets/v2/spreadsheets/{self.spreadsheet_token}/values_batch_update"
@@ -373,21 +399,24 @@ class FeishuManager:
         }
         
         try:
-            response = requests.post(url, headers=headers, json=payload)
-            response.raise_for_status()
-            
-            result = response.json()
-            
-            if result.get("code") == 0:
-                print(f"    ✅ 数据写入: {sheet_name} ({len(df)}行 × {len(df.columns)}列)")
-                return True
-            else:
-                print(f"    ❌ 写入失败: {result.get('msg')}")
-                return False
-                
-        except Exception as e:
+            response = self._request("post", url, headers=headers, json=payload, retries=4, retry_backoff=1.5)
+        except RequestException as e:
             print(f"    ❌ 写入数据失败: {e}")
             return False
+        
+        try:
+            result = response.json()
+        except ValueError:
+            print("    ❌ 写入失败: 无法解析飞书响应")
+            return False
+        
+        if result.get("code") == 0:
+            print(f"    ✅ 数据写入: {sheet_name} ({len(df)}行 × {len(df.columns)}列)")
+            return True
+        else:
+            print(f"    ❌ 写入失败: {result.get('msg')}")
+            return False
+
     
     def _number_to_column(self, n: int) -> str:
         """
@@ -420,7 +449,6 @@ class FeishuManager:
             return False
             
         self._get_access_token()
-        self._rate_limit()
         
         url = f"{self.base_url}/sheets/v3/spreadsheets/{self.spreadsheet_token}/sheets/{sheet_id}"
         
@@ -430,18 +458,21 @@ class FeishuManager:
         }
         
         try:
-            response = requests.delete(url, headers=headers)
-            
-            if response.status_code == 200:
-                result = response.json()
-                if result.get("code") == 0:
-                    print(f"  ✅ 删除默认Sheet")
-                    return True
+            response = self._request("delete", url, headers=headers)
+        except RequestException:
             return False
-        except Exception:
+        
+        try:
+            result = response.json()
+        except ValueError:
             return False
+        
+        if result.get("code") == 0:
+            print(f"  ✅ 删除默认Sheet")
+            return True
+        return False
     
-    def update_sheet_properties(self, sheet_id: str, new_title: str) -> bool:
+    def update_sheet_properties(self, sheet_id: str, new_title: str, retries: int = 3) -> bool:
         """
         更新工作表属性（如名称）
         
@@ -456,7 +487,6 @@ class FeishuManager:
             return False
             
         self._get_access_token()
-        self._rate_limit()
         
         url = f"{self.base_url}/sheets/v3/spreadsheets/{self.spreadsheet_token}/sheets/{sheet_id}"
         
@@ -465,22 +495,31 @@ class FeishuManager:
             "Content-Type": "application/json"
         }
         
-        # 使用正确的格式 - 直接传递title
-        data = {
-            "title": new_title
-        }
+        data = {"title": new_title}
         
-        try:
-            # 使用PATCH方法
-            response = requests.patch(url, headers=headers, json=data)
+        for attempt in range(1, retries + 1):
+            try:
+                response = self._request("patch", url, headers=headers, json=data)
+            except RequestException as e:
+                print(f"    ⚠️ 重命名工作表异常({attempt}/{retries}): {e}")
+                if attempt < retries:
+                    time.sleep(0.8 * attempt)
+                continue
             
-            if response.status_code == 200:
+            try:
                 result = response.json()
-                if result.get("code") == 0:
-                    return True
-            return False
-        except Exception:
-            return False
+            except ValueError:
+                print("    ⚠️ 重命名工作表失败: 无法解析飞书响应")
+                return False
+            
+            if result.get("code") == 0:
+                return True
+            
+            print(f"    ⚠️ 重命名工作表失败({attempt}/{retries}): {result.get('msg', '未知错误')}")
+            if attempt < retries:
+                time.sleep(0.8 * attempt)
+        
+        return False
     
     def get_share_url(self) -> str:
         """
@@ -624,7 +663,6 @@ class FeishuManager:
             return
             
         self._get_access_token()
-        self._rate_limit()
         
         url = f"{self.base_url}/sheets/v3/spreadsheets/{self.spreadsheet_token}/sheets/query"
         headers = {
@@ -633,16 +671,31 @@ class FeishuManager:
         }
         
         try:
-            response = requests.get(url, headers=headers)
-            if response.status_code == 200:
-                result = response.json()
-                if result.get('code') == 0:
-                    sheets = result.get('data', {}).get('sheets', [])
-                    if sheets and len(sheets) == 1:  # 只有一个默认sheet
-                        self.default_sheet_id = sheets[0].get('sheet_id')
-                        print(f"  📝 检测到默认Sheet (ID: {self.default_sheet_id})")
-        except Exception:
+            response = self._request("get", url, headers=headers)
+        except RequestException:
+            return
+        
+        try:
+            result = response.json()
+        except ValueError:
             pass
+        else:
+            if result.get('code') == 0:
+                sheets = result.get('data', {}).get('sheets', [])
+                if sheets:
+                    # 如果首次初始化，记录默认Sheet
+                    if not self.default_sheet_id:
+                        self.default_sheet_id = sheets[0].get('sheet_id')
+                        if self.default_sheet_id:
+                            print(f"  📝 检测到默认Sheet (ID: {self.default_sheet_id})")
+                    
+                    # 重置并记录已存在的sheet映射
+                    self.sheet_ids.clear()
+                    for sheet in sheets:
+                        sheet_id = sheet.get('sheet_id')
+                        title = sheet.get('title')
+                        if sheet_id and title:
+                            self.sheet_ids[title] = sheet_id
     
     def open_existing_spreadsheet(self, spreadsheet_token: str) -> bool:
         """
@@ -698,38 +751,45 @@ class FeishuManager:
 
         # 查询所有现有的sheets
         self._get_access_token()
-        self._rate_limit()
-
+    
         url = f"{self.base_url}/sheets/v3/spreadsheets/{self.spreadsheet_token}/sheets/query"
         headers = {
             "Authorization": f"Bearer {self.access_token}",
             "Content-Type": "application/json"
         }
-
+    
         try:
-            response = requests.get(url, headers=headers)
-            if response.status_code == 200:
-                result = response.json()
-                if result.get('code') == 0:
-                    sheets = result.get('data', {}).get('sheets', [])
-
-                    # 保留第一个sheet，删除其他所有sheets
-                    if len(sheets) > 0:
-                        self.default_sheet_id = sheets[0].get('sheet_id')
-                        self.sheet_ids.clear()
-
-                        # 删除其他sheets
-                        for i in range(1, len(sheets)):
-                            sheet_id = sheets[i].get('sheet_id')
-                            sheet_title = sheets[i].get('title', f'Sheet{i+1}')
-                            if self.delete_sheet(sheet_id):
-                                print(f"  ✅ 删除工作表: {sheet_title}")
-                            else:
-                                print(f"  ⚠️ 无法删除工作表: {sheet_title}")
-
-                    print(f"  📝 保留默认Sheet准备更新")
-        except Exception as e:
+            response = self._request("get", url, headers=headers)
+        except RequestException as e:
             print(f"⚠️ 清空工作表时出错: {e}")
+            return
+        
+        try:
+            result = response.json()
+        except ValueError:
+            print("⚠️ 清空工作表时出错: 飞书响应无法解析")
+            return
+        
+        if result.get('code') == 0:
+            sheets = result.get('data', {}).get('sheets', [])
+
+            # 保留第一个sheet，删除其他所有sheets
+            if len(sheets) > 0:
+                self.default_sheet_id = sheets[0].get('sheet_id')
+                self.sheet_ids.clear()
+
+                # 删除其他sheets
+                for i in range(1, len(sheets)):
+                    sheet_id = sheets[i].get('sheet_id')
+                    sheet_title = sheets[i].get('title', f'Sheet{i+1}')
+                    if self.delete_sheet(sheet_id):
+                        print(f"  ✅ 删除工作表: {sheet_title}")
+                    else:
+                        print(f"  ⚠️ 无法删除工作表: {sheet_title}")
+
+            print(f"  📝 保留默认Sheet准备更新")
+        else:
+            print(f"⚠️ 清空工作表时出错: {result.get('msg', '未知错误')}")
 
     def _write_data_only(self, sheet_name: str, df: pd.DataFrame) -> bool:
         """只写入数据，不创建新sheet（用于默认sheet）"""
@@ -749,7 +809,6 @@ class FeishuManager:
         range_str = f"{sheet_id}!A1:{end_col}{end_row}"
         
         self._get_access_token()
-        self._rate_limit()
         
         # 使用v2 API
         url = f"{self.base_url}/sheets/v2/spreadsheets/{self.spreadsheet_token}/values_batch_update"
@@ -767,18 +826,20 @@ class FeishuManager:
         }
         
         try:
-            response = requests.post(url, headers=headers, json=payload)
-            response.raise_for_status()
-            
-            result = response.json()
-            
-            if result.get("code") == 0:
-                print(f"    ✅ 数据写入: {sheet_name} ({len(df)}行 × {len(df.columns)}列)")
-                return True
-            else:
-                print(f"    ❌ 写入失败: {result.get('msg')}")
-                return False
-                
-        except Exception as e:
+            response = self._request("post", url, headers=headers, json=payload, retries=4, retry_backoff=1.5)
+        except RequestException as e:
             print(f"    ❌ 写入数据失败: {e}")
+            return False
+        
+        try:
+            result = response.json()
+        except ValueError:
+            print("    ❌ 写入失败: 无法解析飞书响应")
+            return False
+        
+        if result.get("code") == 0:
+            print(f"    ✅ 数据写入: {sheet_name} ({len(df)}行 × {len(df.columns)}列)")
+            return True
+        else:
+            print(f"    ❌ 写入失败: {result.get('msg')}")
             return False

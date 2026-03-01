@@ -28,17 +28,14 @@ Date: 2025-08-09
 
 import pandas as pd
 from datetime import datetime, timedelta
+import pytz
 import os
-import sqlite3
 import json
 import time
 import requests
 import argparse
-import sys
-# from final_fixed_screener import FinalFixedScreener  # 已移除
-# Google imports removed - using Feishu instead
 from feishu_manager import FeishuManager
-import shutil
+from google.cloud import storage
 # 网络重试机制将使用简单的time.sleep
 # Excel处理将使用pandas内置功能
 from coingecko_integration import CoinGeckoClient
@@ -50,13 +47,20 @@ except ImportError:
     TelegramNotifier = None
 
 # 配置代理（如果环境变量中有设置）
-proxies = None
-if os.getenv('HTTP_PROXY') or os.getenv('HTTPS_PROXY'):
-    proxies = {}
-    if os.getenv('HTTP_PROXY'):
-        proxies['http'] = os.getenv('HTTP_PROXY')
-    if os.getenv('HTTPS_PROXY'):
-        proxies['https'] = os.getenv('HTTPS_PROXY')
+# 配置代理（如果环境变量中有设置，支持大小写，优先使用小写）
+proxies = {}
+# 优先检查小写，如果不存在则检查大写
+http_proxy = os.getenv('http_proxy') or os.getenv('HTTP_PROXY')
+https_proxy = os.getenv('https_proxy') or os.getenv('HTTPS_PROXY')
+
+if http_proxy:
+    proxies['http'] = http_proxy
+if https_proxy:
+    proxies['https'] = https_proxy
+
+if not proxies:
+    proxies = None
+else:
     print(f"🌐 使用代理服务器: {proxies.get('https', proxies.get('http'))}")
 
 class BinanceTokenScreenerV1:
@@ -75,7 +79,13 @@ class BinanceTokenScreenerV1:
         
         # Feishu configuration
         self.feishu_manager = None
-        self.feishu_config_file = 'feishu_config.json'
+        self.feishu_config_file = os.getenv('FEISHU_CONFIG_PATH', 'feishu_config.json')
+        self.gcs_bucket = os.getenv('GCS_BUCKET', '').strip()
+        self.gcs_history_blob = os.getenv(
+            'GCS_HISTORY_BLOB',
+            'history/daily_gainers_history.json'
+        )
+        self.gcs_output_prefix = os.getenv('GCS_OUTPUT_PREFIX', 'outputs').strip()
         
         # Core components - 功能已集成到主类中
 
@@ -85,7 +95,9 @@ class BinanceTokenScreenerV1:
         # Default settings (configurable via user interaction) - Updated per 7.15 requirements
         self.spot_count = 80
         self.futures_count = 80
+        self.top_n_gainers = int(os.getenv('TOP_N_GAINERS', '5') or 5)
         self.user_email = "seanxx.eth@gmail.com"
+        self.report_paths = {}
         
         # Feishu spreadsheet configuration - Updated per 7.15 requirements
         self.base_sheet_name = "Binance_Token_screener_Analysis"
@@ -266,16 +278,16 @@ class BinanceTokenScreenerV1:
         print("🎯 币安代币筛选器 v3.0 - 生产版本")
         print("=" * 80)
         print(f"📅 发布日期: {self.release_date}")
-        print(f"🔐 认证方式: OAuth (个人谷歌账户)")
+        print(f"🔐 认证方式: 飞书 App")
         print(f"📊 数据来源: 币安API")
         print("=" * 80)
         print("✨ 核心功能:")
-        print("  ✅ OAuth认证 (解决403存储配额错误)")
+        print("  ✅ 飞书认证")
         print("  ✅ 用户可配置现货/期货代币数量")
         print("  ✅ 14日历史数据分析")
         print("  ✅ 实时资金费率")
         print("  ✅ 智能异常检测与颜色标注")
-        print("  ✅ 每日独立谷歌表格文件")
+        print("  ✅ 每日独立飞书表格文件")
         print("🆕 v3.0 核心功能:")
         print("  ✅ 修复OI显示为M/B格式")
         print("  ✅ 增强历史涨幅榜（29列格式）")
@@ -296,6 +308,7 @@ class BinanceTokenScreenerV1:
             print(f"🤖 自动模式：使用默认配置")
             print(f"  - 现货代币数量: {self.spot_count}")
             print(f"  - 期货代币数量: {self.futures_count}")
+            print(f"  - 涨幅榜TopN: {self.top_n_gainers}")
             return
 
         # 获取现货代币数量
@@ -328,9 +341,25 @@ class BinanceTokenScreenerV1:
             except ValueError:
                 print("❌ 请输入有效数字")
 
+        # 获取涨幅榜TopN
+        while True:
+            try:
+                top_input = input(f"📈 请输入涨幅榜TopN (默认 {self.top_n_gainers}): ").strip()
+                if not top_input:
+                    break
+                top_n = int(top_input)
+                if top_n <= 0:
+                    print("❌ 数量必须大于0")
+                    continue
+                self.top_n_gainers = top_n
+                break
+            except ValueError:
+                print("❌ 请输入有效数字")
+
         print(f"\n✅ 配置确认:")
         print(f"   现货代币: {self.spot_count}")
         print(f"   期货代币: {self.futures_count}")
+        print(f"   涨幅榜TopN: {self.top_n_gainers}")
         print()
     
     def generate_daily_sheet_name(self):
@@ -354,115 +383,6 @@ class BinanceTokenScreenerV1:
             return False
         except Exception as e:
             print(f"❌ 飞书连接失败: {e}")
-            return False
-
-        # 加载现有令牌
-        if os.path.exists(self.token_file):
-            try:
-                self.creds = Credentials.from_authorized_user_file(self.token_file, self.SCOPES)
-            except Exception as e:
-                print(f"⚠️ 令牌文件损坏: {e}")
-                print("将尝试重新授权...")
-                return self.reauthorize()
-        else:
-            print("❌ 未找到token.json文件")
-            print("将尝试自动授权...")
-            return self.reauthorize()
-
-        # 检查令牌状态
-        if self.creds and self.creds.valid:
-            print("✅ 现有令牌有效")
-        elif self.creds and self.creds.expired and self.creds.refresh_token:
-            print("🔄 令牌已过期，尝试刷新...")
-
-            # 带重试的令牌刷新
-            refresh_successful = False
-            for attempt in range(max_retries):
-                try:
-                    print(f"🔄 刷新尝试 {attempt + 1}/{max_retries}...")
-                    self.creds.refresh(Request())
-
-                    # 保存刷新后的令牌
-                    with open(self.token_file, 'w') as token:
-                        token.write(self.creds.to_json())
-
-                    print("✅ 令牌刷新成功")
-                    refresh_successful = True
-                    break
-
-                except Exception as e:
-                    error_msg = str(e).lower()
-                    print(f"❌ 刷新尝试 {attempt + 1} 失败: {e}")
-                    
-                    # 检查是否是刷新令牌失效
-                    if 'invalid_grant' in error_msg or 'token has been expired or revoked' in error_msg:
-                        print("⚠️ 刷新令牌已失效，需要重新授权")
-                        return self.reauthorize()
-
-                    if attempt < max_retries - 1:
-                        wait_time = (attempt + 1) * 2  # 递增等待时间
-                        print(f"⏳ 等待 {wait_time} 秒后重试...")
-                        time.sleep(wait_time)
-            
-            if not refresh_successful:
-                print("❌ 所有刷新尝试都失败了")
-                print("🔄 尝试重新授权...")
-                return self.reauthorize()
-                        
-        else:
-            print("❌ 令牌无效或缺失刷新令牌")
-            print("🔄 尝试重新授权...")
-            return self.reauthorize()
-
-        # 初始化谷歌表格客户端
-        try:
-            self.gc = gspread.authorize(self.creds)
-            print("✅ OAuth认证成功")
-            return True
-        except Exception as e:
-            print(f"❌ 谷歌表格初始化失败: {e}")
-            print("🔄 尝试重新授权...")
-            return self.reauthorize()
-
-    def reauthorize(self):
-        """重新授权流程"""
-        print("\n🔑 开始重新授权流程...")
-        
-        try:
-            from google_auth_oauthlib.flow import InstalledAppFlow
-            
-            # 创建OAuth流程
-            flow = InstalledAppFlow.from_client_secrets_file(
-                self.oauth_creds_file, 
-                self.SCOPES
-            )
-            
-            print("📌 请在浏览器中完成授权...")
-            print("提示: 请确保授予所有请求的权限")
-            
-            # 运行本地服务器接收授权
-            self.creds = flow.run_local_server(
-                port=8080,
-                prompt='consent',  # 强制显示同意屏幕
-                access_type='offline'  # 确保获取刷新令牌
-            )
-            
-            # 保存新令牌
-            with open(self.token_file, 'w') as token:
-                token.write(self.creds.to_json())
-            
-            print("✅ 重新授权成功!")
-            
-            # 初始化谷歌表格客户端
-            self.gc = gspread.authorize(self.creds)
-            return True
-            
-        except Exception as e:
-            print(f"❌ 重新授权失败: {e}")
-            print("\n💡 请手动运行以下命令重新授权:")
-            print("   python oauth_setup_enhanced.py")
-            print("   或")
-            print("   python oauth_setup_v1.0.py")
             return False
     
     def authenticate(self):
@@ -1534,9 +1454,9 @@ class BinanceTokenScreenerV1:
         """创建每日涨幅榜历史数据 - 按照用户要求的格式"""
         print("📈 创建每日涨幅榜历史数据...")
 
-        # 获取当前日期的涨幅榜前20名
-        current_gainers = df[df['1d_return'] > 0].nlargest(20, '1d_return').copy()
-        current_date = datetime.now().strftime('%m-%d')  # 7.28需求5: 只显示月日
+        # 获取当前日期的涨幅榜前N名
+        current_gainers = df[df['1d_return'] > 0].nlargest(self.top_n_gainers, '1d_return').copy()
+        current_date = datetime.now().strftime('%Y-%m-%d')  # 修复: 使用完整日期格式 YYYY-MM-DD
 
         # 尝试读取历史数据
         history_data = self.load_daily_gainers_history()
@@ -1571,6 +1491,12 @@ class BinanceTokenScreenerV1:
         history_file = 'daily_gainers_history.json'
 
         try:
+            if self.gcs_bucket:
+                gcs_data = self.read_json_from_gcs(self.gcs_history_blob)
+                if gcs_data is not None:
+                    print(f"📚 从GCS加载历史数据: {len(gcs_data)} 个日期的记录")
+                    return gcs_data
+
             if os.path.exists(history_file):
                 with open(history_file, 'r', encoding='utf-8') as f:
                     history_data = json.load(f)
@@ -1589,31 +1515,12 @@ class BinanceTokenScreenerV1:
         history_data[current_date] = current_data
 
         # 获取最近的14个日期，按照实际日期排序
-        # 将MM-DD格式转换为可排序的日期对象
-        from datetime import datetime
-        current_year = datetime.now().year
-        
-        def parse_date(date_str):
-            try:
-                # 处理MM-DD格式
-                if '-' in date_str and len(date_str.split('-')) == 2:
-                    month, day = date_str.split('-')
-                    return datetime(current_year, int(month), int(day))
-                # 处理YYYY-MM-DD格式
-                elif '-' in date_str and len(date_str.split('-')) == 3:
-                    year, month, day = date_str.split('-')
-                    return datetime(int(year), int(month), int(day))
-                else:
-                    return datetime.min
-            except:
-                return datetime.min
-        
-        # 按日期排序，最新的在前
-        all_dates = sorted(history_data.keys(), key=parse_date, reverse=True)[:14]
+        # 使用简单的字符串排序，因为 YYYY-MM-DD 格式支持字典序排序
+        all_dates = sorted(history_data.keys(), reverse=True)[:14]
 
         # 创建合并后的数据结构
         merged_data = []
-        max_rows = 20  # 每日最多20个代币
+        max_rows = self.top_n_gainers  # 每日最多N个代币
 
         for rank in range(1, max_rows + 1):
             row_data = {'排名': rank}
@@ -1632,22 +1539,12 @@ class BinanceTokenScreenerV1:
                 if date in history_data and rank <= len(history_data[date]):
                     token_data = history_data[date][rank-1]
                     row_data[token_key] = token_data['代币']
-                    # 确保日期格式为MM-DD（去除年份）
-                    if '-' in date and len(date.split('-')) > 2:
-                        # 如果日期包含年份，只取月和日
-                        date_parts = date.split('-')
-                        formatted_date = f"{date_parts[1]}-{date_parts[2]}"
-                    else:
-                        formatted_date = date
-                    row_data[date_key] = formatted_date
+                    # 直接使用 YYYY-MM-DD 格式
+                    row_data[date_key] = date
                 else:
                     row_data[token_key] = ''
-                    # 空白位置也要确保日期格式正确
-                    if date and '-' in date and len(date.split('-')) > 2:
-                        date_parts = date.split('-')
-                        formatted_date = f"{date_parts[1]}-{date_parts[2]}"
-                    else:
-                        formatted_date = date if i < len(all_dates) else ''
+                    # 空白位置处理
+                    formatted_date = date if i < len(all_dates) else ''
                     row_data[date_key] = formatted_date
 
             merged_data.append(row_data)
@@ -1716,6 +1613,9 @@ class BinanceTokenScreenerV1:
             with open(history_file, 'w', encoding='utf-8') as f:
                 json.dump(final_history, f, ensure_ascii=False, indent=2)
             print(f"💾 历史数据已保存到 {history_file} (包含 {len(final_history)} 个有效日期)")
+
+            if self.gcs_bucket:
+                self.write_json_to_gcs(self.gcs_history_blob, final_history)
 
         except Exception as e:
             print(f"⚠️ 保存历史数据失败: {e}")
@@ -2022,13 +1922,15 @@ class BinanceTokenScreenerV1:
                         display_df = display_df.rename(columns=column_mapping)
 
                         # 创建信息头DataFrame
-                        timestamp_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        timestamp_str = datetime.now(
+                            pytz.timezone('Asia/Shanghai')
+                        ).strftime('%Y-%m-%d %H:%M:%S')
                         total_anomalies = sum(len(indices) for indices in anomaly_info.values())
 
                         info_data = {
                             '信息': [
                                 f"📅 更新时间: {timestamp_str}",
-                                f"🔐 认证方式: OAuth v1.0 (个人账户)",
+                                f"🔐 认证方式: 飞书 App",
                                 f"📊 数据来源: 币安API (现货:{self.spot_count}, 期货:{self.futures_count})",
                                 f"🎯 代币数量: {len(df)} 个代币",
                                 f"🔍 精细化异常: {total_anomalies} 个检测到",
@@ -2114,6 +2016,168 @@ class BinanceTokenScreenerV1:
         except Exception as e:
             print(f"❌ CSV文件创建失败: {e}")
             return None
+
+    def get_top_gainers(self, df, top_n=None):
+        """Get top N gainers from full dataset."""
+        if df is None or df.empty:
+            return pd.DataFrame()
+        n = top_n if top_n is not None else self.top_n_gainers
+        gainers = df[df['1d_return'] > 0].nlargest(n, '1d_return').copy()
+        return gainers.reset_index(drop=True)
+
+    def write_top_gainers_report(self, df):
+        """Write top gainers report (JSON + Markdown)."""
+        top_df = self.get_top_gainers(df)
+        report = {
+            'date': datetime.now().strftime('%Y-%m-%d'),
+            'top_n': int(self.top_n_gainers),
+            'count': len(top_df),
+            'records': []
+        }
+
+        if not top_df.empty:
+            for _, row in top_df.iterrows():
+                report['records'].append({
+                    'base_asset': row.get('base_asset', ''),
+                    'symbol': row.get('symbol', ''),
+                    'price': float(row.get('price', 0) or 0),
+                    '1d_return': float(row.get('1d_return', 0) or 0),
+                    '7d_return': float(row.get('7d_return', 0) or 0),
+                    '14d_return': float(row.get('14d_return', 0) or 0),
+                    'spot_volume_24h': float(row.get('spot_volume_24h', 0) or 0),
+                    'futures_volume_24h': float(row.get('futures_volume_24h', 0) or 0),
+                    'total_volume_24h': float(row.get('total_volume_24h', 0) or 0),
+                    'market_cap': float(row.get('market_cap', 0) or 0),
+                    'open_interest': float(row.get('open_interest', 0) or 0),
+                    'funding_rate': float(row.get('funding_rate', 0) or 0)
+                })
+
+        json_path = self.get_output_path('top_gainers.json', '分析报告')
+        md_path = self.get_output_path('top_gainers.md', '分析报告')
+
+        try:
+            with open(json_path, 'w', encoding='utf-8') as f:
+                json.dump(report, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"⚠️ 写入top_gainers.json失败: {e}")
+
+        try:
+            lines = []
+            lines.append(f"# 每日涨幅榜 Top {self.top_n_gainers}")
+            lines.append(f"- 日期: {report['date']}")
+            lines.append(f"- 数量: {report['count']}")
+            lines.append("")
+            if top_df.empty:
+                lines.append("无可用涨幅数据。")
+            else:
+                lines.append("| 排名 | 代币 | 1日涨幅 | 价格 | 24h总交易额 | OI | 资金费率 |")
+                lines.append("| --- | --- | --- | --- | --- | --- | --- |")
+                for idx, row in top_df.iterrows():
+                    lines.append(
+                        f"| {idx+1} | {row.get('base_asset','')} | {row.get('1d_return',0):+.2f}% | "
+                        f"{row.get('price',0):.6f} | {row.get('total_volume_24h',0)/1000000:.1f}M | "
+                        f"{self.smart_format_oi(row.get('open_interest',0))} | {row.get('funding_rate',0):+.4f}% |"
+                    )
+            with open(md_path, 'w', encoding='utf-8') as f:
+                f.write("\n".join(lines))
+        except Exception as e:
+            print(f"⚠️ 写入top_gainers.md失败: {e}")
+
+        self.report_paths['top_gainers_json'] = json_path
+        self.report_paths['top_gainers_md'] = md_path
+        return report
+
+    def build_futures_focus_anomaly_summary(self, futures_df):
+        """Build anomaly summary for futures focus dataset."""
+        if futures_df is None or futures_df.empty:
+            return None
+
+        anomaly_info = self.detect_refined_anomalies(futures_df, 'futures_focus')
+        total_anomalies = sum(len(v) for v in anomaly_info.values())
+        summary = {
+            'date': datetime.now().strftime('%Y-%m-%d'),
+            'total_anomalies': int(total_anomalies),
+            'by_type': {}
+        }
+
+        for anomaly_type, indices in anomaly_info.items():
+            items = []
+            for idx in indices[:5]:
+                if idx not in futures_df.index:
+                    continue
+                row = futures_df.loc[idx]
+                items.append({
+                    'base_asset': row.get('base_asset', ''),
+                    'symbol': row.get('symbol', ''),
+                    'futures_symbol': row.get('futures_symbol', ''),
+                    'futures_volume_24h': float(row.get('futures_volume_24h', 0) or 0),
+                    'open_interest': float(row.get('open_interest', 0) or 0),
+                    'avg_oi_7d': float(row.get('avg_oi_7d', 0) or 0),
+                    'funding_rate': float(row.get('funding_rate', 0) or 0),
+                    'market_cap': float(row.get('market_cap', 0) or 0),
+                    '1d_return': float(row.get('1d_return', 0) or 0),
+                    '7d_return': float(row.get('7d_return', 0) or 0),
+                    '14d_return': float(row.get('14d_return', 0) or 0)
+                })
+            summary['by_type'][anomaly_type] = items
+
+        return summary
+
+    def write_futures_focus_anomaly_report(self, futures_df):
+        """Write futures focus anomaly report (JSON + Markdown)."""
+        summary = self.build_futures_focus_anomaly_summary(futures_df)
+        if summary is None:
+            return None
+
+        json_path = self.get_output_path('futures_focus_anomalies.json', '分析报告')
+        md_path = self.get_output_path('futures_focus_anomalies.md', '分析报告')
+
+        try:
+            with open(json_path, 'w', encoding='utf-8') as f:
+                json.dump(summary, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"⚠️ 写入futures_focus_anomalies.json失败: {e}")
+
+        try:
+            type_labels = {
+                'futures_volume_growth_top5': '期货交易量增长异常',
+                'spot_volume_growth_top5': '现货交易量增长异常',
+                '1d_return_top5': '1日涨跌异常',
+                '14d_return_top5': '14日涨跌异常',
+                'volume_vs_mcap_top5': '交易量/市值异常',
+                'funding_rate_anomaly': '资金费率异常',
+                'oi_vs_mcap': 'OI/市值异常',
+                'oi_vs_avg_oi': 'OI增长异常'
+            }
+            lines = []
+            lines.append("# 期货专注页异动摘要")
+            lines.append(f"- 日期: {summary['date']}")
+            lines.append(f"- 异动总数: {summary['total_anomalies']}")
+            lines.append("")
+
+            for anomaly_type, items in summary['by_type'].items():
+                if not items:
+                    continue
+                label = type_labels.get(anomaly_type, anomaly_type)
+                lines.append(f"## {label}")
+                lines.append("| 代币 | 期货成交额 | OI | 资金费率 | 1日涨幅 |")
+                lines.append("| --- | --- | --- | --- | --- |")
+                for item in items:
+                    lines.append(
+                        f"| {item.get('base_asset','')} | {item.get('futures_volume_24h',0)/1000000:.1f}M | "
+                        f"{self.smart_format_oi(item.get('open_interest',0))} | {item.get('funding_rate',0):+.4f}% | "
+                        f"{item.get('1d_return',0):+.2f}% |"
+                    )
+                lines.append("")
+
+            with open(md_path, 'w', encoding='utf-8') as f:
+                f.write("\n".join(lines))
+        except Exception as e:
+            print(f"⚠️ 写入futures_focus_anomalies.md失败: {e}")
+
+        self.report_paths['futures_focus_anomalies_json'] = json_path
+        self.report_paths['futures_focus_anomalies_md'] = md_path
+        return summary
 
     def create_excel_from_csv_files(self, csv_files):
         """从CSV文件创建带颜色标注的Excel文件"""
@@ -2231,10 +2295,12 @@ class BinanceTokenScreenerV1:
                 ws = wb.create_sheet(title=sheet_name)
 
                 # 添加信息头
-                timestamp_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                timestamp_str = datetime.now(
+                    pytz.timezone('Asia/Shanghai')
+                ).strftime('%Y-%m-%d %H:%M:%S')
                 info_data = [
                     [f"📅 更新时间: {timestamp_str}"],
-                    [f"🔐 认证方式: OAuth v1.0 (个人账户)"],
+                    [f"🔐 认证方式: 飞书 App"],
                     [f"📊 数据来源: 币安API (现货:{self.spot_count}, 期货:{self.futures_count})"],
                     [f"🎯 代币数量: {len(df)} 个代币"],
                     [f"🔍 精细化异常: 颜色标注显示"],
@@ -2439,218 +2505,6 @@ class BinanceTokenScreenerV1:
             print(f"❌ CSV上传失败: {e}")
             return False
     
-    def upload_excel_file(self, excel_filename):
-        """上传Excel文件 - 修复数据格式问题"""
-        try:
-            # 读取Excel文件
-            excel_data = pd.read_excel(excel_filename, sheet_name=None, header=None)
-
-            # 为每个Excel工作表创建Google工作表
-            for sheet_name, df in excel_data.items():
-                print(f"  📋 上传工作表: {sheet_name}")
-
-                try:
-                    # 清理数据
-                    cleaned_df = self.clean_data_for_upload(df)
-
-                    # 创建或获取工作表
-                    try:
-                        worksheet = self.sheet.worksheet(sheet_name)
-                        worksheet.clear()
-                    except gspread.WorksheetNotFound:
-                        worksheet = self.sheet.add_worksheet(title=sheet_name, rows=1000, cols=30)
-
-                    # 准备上传数据
-                    upload_data = []
-                    for _, row in cleaned_df.iterrows():
-                        row_data = []
-                        for value in row:
-                            # 确保值是字符串且不为空
-                            str_value = str(value) if value is not None else ''
-                            # 限制字符串长度
-                            if len(str_value) > 1000:
-                                str_value = str_value[:1000] + '...'
-                            row_data.append(str_value)
-                        upload_data.append(row_data)
-
-                    # 分批上传数据
-                    batch_size = 100
-                    for i in range(0, len(upload_data), batch_size):
-                        batch_data = upload_data[i:i+batch_size]
-                        start_row = i + 1
-
-                        try:
-                            worksheet.update(values=batch_data, range_name=f'A{start_row}')
-                            print(f"    📤 批次 {i//batch_size + 1}: {len(batch_data)} 行已上传")
-                        except Exception as batch_error:
-                            print(f"    ⚠️ 批次 {i//batch_size + 1} 上传失败: {batch_error}")
-                            continue
-
-                    print(f"    ✅ {sheet_name}: 数据处理完成")
-
-                except Exception as e:
-                    print(f"    ❌ {sheet_name} 上传失败: {e}")
-                    continue
-
-            print(f"✅ Excel文件已成功上传到飞书表格")
-            print(f"📊 Google Sheet链接: {self.sheet.url}")
-            return True
-
-        except Exception as e:
-            print(f"❌ Excel上传失败: {e}")
-            return False
-
-    def clean_data_for_upload(self, df):
-        """清理数据以确保飞书表格兼容性"""
-        cleaned_df = df.copy()
-
-        for col in cleaned_df.columns:
-            if cleaned_df[col].dtype in ['float64', 'float32']:
-                # 处理无穷大和NaN值
-                cleaned_df[col] = cleaned_df[col].replace([float('inf'), float('-inf')], 0)
-                cleaned_df[col] = cleaned_df[col].fillna(0)
-
-                # 限制浮点数精度，避免JSON兼容性问题
-                cleaned_df[col] = cleaned_df[col].round(6)
-
-                # 将超大数值限制在合理范围内
-                max_val = 1e15  # 设置最大值限制
-                cleaned_df[col] = cleaned_df[col].clip(-max_val, max_val)
-
-        # 确保所有数据都是字符串格式
-        for col in cleaned_df.columns:
-            cleaned_df[col] = cleaned_df[col].astype(str)
-            # 替换可能导致问题的特殊字符
-            cleaned_df[col] = cleaned_df[col].replace(['inf', '-inf', 'nan'], '0')
-
-        return cleaned_df
-
-    def upload_csv_files(self, csv_files):
-        """上传CSV文件 - 修复数据格式问题"""
-        try:
-            for csv_file in csv_files:
-                # 从文件名提取工作表名称
-                sheet_name = csv_file.split('_')[2].replace('.csv', '')  # 提取工作表名称
-                print(f"  📋 上传CSV: {sheet_name}")
-
-                try:
-                    # 读取CSV文件
-                    df = pd.read_csv(csv_file, encoding='utf-8-sig')
-
-                    # 清理数据
-                    cleaned_df = self.clean_data_for_upload(df)
-
-                    # 创建或获取工作表
-                    try:
-                        worksheet = self.sheet.worksheet(sheet_name)
-                        worksheet.clear()
-                    except gspread.WorksheetNotFound:
-                        worksheet = self.sheet.add_worksheet(title=sheet_name, rows=1000, cols=30)
-
-                    # 添加信息头
-                    timestamp_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    info_data = [
-                        [f"📅 更新时间: {timestamp_str}"],
-                        [f"🔐 认证方式: OAuth v1.0 (个人账户)"],
-                        [f"📊 数据来源: 币安API (现货:{self.spot_count}, 期货:{self.futures_count})"],
-                        [f"🎯 代币数量: {len(df)} 个代币"],
-                        [f"🔍 精细化异常: 单元格级别标注"],
-                        [],  # 空行
-                        list(cleaned_df.columns)  # 表头
-                    ]
-
-                    # 添加数据行 - 确保所有值都是字符串
-                    for _, row in cleaned_df.iterrows():
-                        row_data = []
-                        for value in row:
-                            # 确保值是字符串且不为空
-                            str_value = str(value) if value is not None else ''
-                            # 限制字符串长度，避免过长的数据
-                            if len(str_value) > 1000:
-                                str_value = str_value[:1000] + '...'
-                            row_data.append(str_value)
-                        info_data.append(row_data)
-
-                    # 分批上传数据，避免一次性上传过多数据
-                    batch_size = 100
-                    for i in range(0, len(info_data), batch_size):
-                        batch_data = info_data[i:i+batch_size]
-                        start_row = i + 1
-
-                        try:
-                            worksheet.update(values=batch_data, range_name=f'A{start_row}')
-                            print(f"    📤 批次 {i//batch_size + 1}: {len(batch_data)} 行已上传")
-                        except Exception as batch_error:
-                            print(f"    ⚠️ 批次 {i//batch_size + 1} 上传失败: {batch_error}")
-                            continue
-
-                    print(f"    ✅ {sheet_name}: {len(df)} 行数据处理完成")
-
-                except Exception as e:
-                    print(f"    ❌ {csv_file} 上传失败: {e}")
-                    continue
-
-            print(f"✅ CSV文件已成功上传到飞书表格")
-            print(f"📊 Google Sheet链接: {self.sheet.url}")
-            return True
-
-        except Exception as e:
-            print(f"❌ CSV上传失败: {e}")
-            return False
-
-    def create_or_get_sheet(self):
-        """Create or get daily Google Sheet - Updated per 7.15 requirements"""
-        try:
-            # Check if today's sheet exists
-            try:
-                self.sheet = self.gc.open(self.sheet_name)
-                print(f"📋 Today's sheet exists: {self.sheet_name}")
-
-                # Clear existing worksheets and delete blank Sheet1
-                worksheets = self.sheet.worksheets()
-                for ws in worksheets:
-                    if ws.title.lower() in ['sheet1', 'sheet 1', '工作表1']:
-                        print(f"🗑️ Deleting blank sheet: {ws.title}")
-                        self.sheet.del_worksheet(ws)
-                    else:
-                        ws.clear()
-                        print(f"🧹 Cleared worksheet: {ws.title}")
-
-            except gspread.SpreadsheetNotFound:
-                # Create new sheet
-                self.sheet = self.gc.create(self.sheet_name)
-                print(f"✅ Created new sheet: {self.sheet_name}")
-
-                # Delete the default Sheet1
-                try:
-                    default_sheet = self.sheet.sheet1
-                    if default_sheet.title.lower() in ['sheet1', 'sheet 1', '工作表1']:
-                        print(f"🗑️ Deleting default blank sheet: {default_sheet.title}")
-                        self.sheet.del_worksheet(default_sheet)
-                except:
-                    pass
-
-            # Set permissions - 修改为所有人可编辑
-            try:
-                self.sheet.share(self.user_email, perm_type='user', role='writer')
-                print(f"✅ Granted edit access to {self.user_email}")
-            except:
-                print("⚠️ User permission setting failed")
-
-            try:
-                # 修改为所有人都可以编辑
-                self.sheet.share('', perm_type='anyone', role='writer')
-                print("✅ Set as publicly editable - 所有人可编辑")
-            except:
-                print("⚠️ Public permission setting failed")
-
-            print(f"📊 Today's sheet URL: {self.sheet.url}")
-            return True
-
-        except Exception as e:
-            print(f"❌ Sheet operation failed: {e}")
-            return False
-
     def apply_refined_anomaly_formatting(self, worksheet, df, anomaly_info, columns):
         """Apply refined single-cell anomaly formatting - Per 7.15 requirements"""
         try:
@@ -2729,9 +2583,9 @@ class BinanceTokenScreenerV1:
         offline_mode = self.check_offline_mode()
 
         if not offline_mode:
-            # OAuth认证
+            # 飞书认证
             if not self.authenticate():
-                print("❌ OAuth认证失败")
+                print("❌ 飞书认证失败")
                 print("🔄 切换到离线模式...")
                 offline_mode = True
 
@@ -2744,11 +2598,17 @@ class BinanceTokenScreenerV1:
         # 创建增强数据集
         datasets = self.create_enhanced_datasets(enhanced_df)
 
+        # 生成Top涨幅榜与期货专注异动摘要
+        self.write_top_gainers_report(enhanced_df)
+        self.write_futures_focus_anomaly_report(datasets.get('futures_focus'))
+
         # 创建带标注的数据文件
         data_files = self.create_excel_with_annotations(datasets)
         if not data_files:
             print("❌ 数据文件创建失败")
             return None
+
+        self.persist_outputs_to_gcs(data_files)
 
         # 创建整合的Excel文件
         if isinstance(data_files, list):  # CSV文件列表
@@ -2812,6 +2672,90 @@ class BinanceTokenScreenerV1:
                 print("📱 手动模式：跳过Telegram通知")
         except Exception as e:
             print(f"⚠️ Telegram通知异常: {e}")
+
+    def get_gcs_client(self):
+        """Create GCS client if bucket is configured."""
+        if not self.gcs_bucket:
+            return None
+        try:
+            return storage.Client()
+        except Exception as e:
+            print(f"⚠️ GCS客户端初始化失败: {e}")
+            return None
+
+    def read_json_from_gcs(self, blob_name):
+        """Read JSON from GCS blob."""
+        client = self.get_gcs_client()
+        if not client:
+            return None
+        try:
+            bucket = client.bucket(self.gcs_bucket)
+            blob = bucket.blob(blob_name)
+            if not blob.exists(client):
+                return None
+            content = blob.download_as_text(encoding='utf-8')
+            return json.loads(content)
+        except Exception as e:
+            print(f"⚠️ 从GCS读取失败: {e}")
+            return None
+
+    def write_json_to_gcs(self, blob_name, data):
+        """Write JSON to GCS blob."""
+        client = self.get_gcs_client()
+        if not client:
+            return False
+        try:
+            bucket = client.bucket(self.gcs_bucket)
+            blob = bucket.blob(blob_name)
+            content = json.dumps(data, ensure_ascii=False, indent=2)
+            blob.upload_from_string(content, content_type='application/json')
+            print(f"☁️ 历史数据已上传到GCS: {self.gcs_bucket}/{blob_name}")
+            return True
+        except Exception as e:
+            print(f"⚠️ 上传历史数据到GCS失败: {e}")
+            return False
+
+    def persist_outputs_to_gcs(self, data_files):
+        """Upload generated files to GCS if bucket is configured."""
+        if not self.gcs_bucket:
+            return
+        files_to_upload = []
+        if isinstance(data_files, dict):
+            csv_files = data_files.get('csv', [])
+            excel_file = data_files.get('excel')
+            if isinstance(csv_files, list):
+                files_to_upload.extend(csv_files)
+            if isinstance(excel_file, str):
+                files_to_upload.append(excel_file)
+        elif isinstance(data_files, list):
+            files_to_upload.extend(data_files)
+        elif isinstance(data_files, str):
+            files_to_upload.append(data_files)
+
+        if not files_to_upload:
+            return
+
+        for file_path in files_to_upload:
+            if not os.path.exists(file_path):
+                continue
+            rel_path = os.path.relpath(file_path, start=self.output_folder)
+            gcs_key = f"{self.gcs_output_prefix}/{self.output_folder}/{rel_path}"
+            self.upload_file_to_gcs(file_path, gcs_key)
+
+    def upload_file_to_gcs(self, file_path, blob_name):
+        """Upload a local file to GCS."""
+        client = self.get_gcs_client()
+        if not client:
+            return False
+        try:
+            bucket = client.bucket(self.gcs_bucket)
+            blob = bucket.blob(blob_name)
+            blob.upload_from_filename(file_path)
+            print(f"☁️ 已上传到GCS: {self.gcs_bucket}/{blob_name}")
+            return True
+        except Exception as e:
+            print(f"⚠️ 上传文件到GCS失败: {e}")
+            return False
     
     def check_offline_mode(self):
         """检查是否使用离线模式"""
@@ -2864,6 +2808,13 @@ class BinanceTokenScreenerV1:
                 if len(data_files) > 3:
                     print(f"   - ... 还有 {len(data_files) - 3} 个文件")
 
+        if self.report_paths:
+            print(f"\n📝 额外分析报告:")
+            if 'top_gainers_md' in self.report_paths:
+                print(f"  - 涨幅榜TopN: {self.report_paths['top_gainers_md']}")
+            if 'futures_focus_anomalies_md' in self.report_paths:
+                print(f"  - 期货专注异动摘要: {self.report_paths['futures_focus_anomalies_md']}")
+
         if not offline and hasattr(self, 'sheet') and self.sheet:
             print(f"🔗 飞书表格链接: {self.sheet.url}")
         elif offline:
@@ -2877,7 +2828,7 @@ class BinanceTokenScreenerV1:
         print(f"  - 请求现货代币: {self.spot_count}")
         print(f"  - 请求期货代币: {self.futures_count}")
         print(f"  - 精细化异常检测: 单元格级别标注 (7.15需求)")
-        print(f"  - 认证方式: OAuth v{self.version} (个人账户)")
+        print(f"  - 认证方式: 飞书 App")
 
         # 显示工作表详情
         print(f"\n📋 工作表详情:")
@@ -2893,7 +2844,7 @@ class BinanceTokenScreenerV1:
         print(f"  ✅ Telegram自动报告通知")
         print(f"  ✅ 排除代币过滤 (ALPACA, BNX等)")
         print(f"  ✅ 每日独立文件 (不覆盖历史)")
-        print(f"  ✅ OAuth认证 (解决403存储错误)")
+        print(f"  ✅ 飞书认证")
         print(f"  ✅ 异常标注逻辑列")
         print(f"  ✅ 删除空白Sheet1标签页")
         print(f"  ✅ 新增缺失标签页: 每日涨幅榜, 低量高市值, 高市值低期货量")
@@ -3059,6 +3010,8 @@ def main():
                         help='现货代币数量（默认: 80）')
     parser.add_argument('--futures-count', type=int, default=80,
                         help='期货代币数量（默认: 80）')
+    parser.add_argument('--top-gainers', type=int, default=5,
+                        help='涨幅榜TopN（默认: 5）')
     args = parser.parse_args()
 
     print("🚀 启动币安代币筛选器 v3.0")
@@ -3076,25 +3029,27 @@ def main():
             screener.spot_count = args.spot_count
         if args.futures_count:
             screener.futures_count = args.futures_count
+        if args.top_gainers:
+            screener.top_n_gainers = args.top_gainers
             
         result = screener.run_analysis()
 
         if result:
             print("\n✅ 分析完成成功!")
             print("💡 v1.0 生产功能:")
-            print("  - OAuth认证 (解决403错误)")
+            print("  - 飞书认证")
             print("  - 用户可配置代币数量")
             print("  - 14日历史数据分析")
             print("  - 实时资金费率")
             print("  - 智能异常检测")
             print("  - 颜色编码异常标注")
-            print("  - 每日独立谷歌表格")
+            print("  - 每日独立飞书表格")
         else:
             print("\n❌ 分析失败")
             print("💡 故障排除:")
-            print("  1. 检查OAuth认证状态")
+            print("  1. 检查飞书认证状态")
             print("  2. 验证网络连接")
-            print("  3. 确认谷歌账户权限")
+            print("  3. 确认飞书应用权限")
 
     except KeyboardInterrupt:
         print("\n⚠️ 用户中断分析")
